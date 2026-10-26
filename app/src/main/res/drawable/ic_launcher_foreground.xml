@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Center safe zone is between 21 and 87 (66x66) -->
+    <!-- First candle (Bearish Red) -->
+    <path
+        android:pathData="M34,35 L34,73"
+        android:strokeWidth="2"
+        android:strokeColor="#FF6B6B" />
+    <path
+        android:pathData="M30,42 L38,42 L38,62 L30,62 Z"
+        android:fillColor="#FF3B30" />
+
+    <!-- Second candle (Bullish Green/Cyan) -->
+    <path
+        android:pathData="M46,30 L46,68"
+        android:strokeWidth="2"
+        android:strokeColor="#5AC8FA" />
+    <path
+        android:pathData="M42,36 L50,36 L50,56 L42,56 Z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Third candle (Bullish High Green/Blue) -->
+    <path
+        android:pathData="M58,26 L58,70"
+        android:strokeWidth="2"
+        android:strokeColor="#5AC8FA" />
+    <path
+        android:pathData="M54,30 L62,30 L62,50 L54,50 Z"
+        android:fillColor="#5AC8FA" />
+
+    <!-- Fourth candle (Bearish Red) -->
+    <path
+        android:pathData="M70,38 L70,76"
+        android:strokeWidth="2"
+        android:strokeColor="#FF6B6B" />
+    <path
+        android:pathData="M66,45 L74,45 L74,67 L66,67 Z"
+        android:fillColor="#FF3B30" />
+
+    <!-- Trend line connecting closes -->
+    <path
+        android:pathData="M28,66 L42,50 L54,42 L66,32 L78,28"
+        android:strokeWidth="3"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+
+    <!-- Trend arrow tip -->
+    <path
+        android:pathData="M73,28 L78,28 L78,33"
+        android:strokeWidth="3"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

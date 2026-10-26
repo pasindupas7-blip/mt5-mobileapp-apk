@@ -1,0 +1,6 @@
+{
+  "name": "MetaTrader 5",
+  "description": "MetaTrader 5 iOS mobile trading platform clone featuring Quotes with large pip tick animations, interactive Candlestick Charts with MA overlays, Trade management with live balance metrics, Trade History, and Account Settings.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
