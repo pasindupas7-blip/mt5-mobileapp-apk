@@ -272,21 +272,25 @@ class CloudTradeRepository(
         val docRef = db.collection("users").document(userId).collection("positions").document(docId)
         val payload = mutableMapOf<String, Any>(
             "userId" to userId,
-            "ticketId" to position.id,
-            "symbol" to position.symbol,
+            "ticketId" to position.id.coerceAtLeast(1L),
+            "symbol" to position.symbol.ifBlank { "EURUSD" }.take(32),
             "isBuy" to position.isBuy,
-            "lots" to position.lots,
-            "openPrice" to position.openPrice,
-            "currentPrice" to position.currentPrice,
+            "lots" to position.lots.coerceIn(0.01, 1000.0),
+            "openPrice" to position.openPrice.coerceAtLeast(0.00001),
+            "currentPrice" to position.currentPrice.coerceAtLeast(0.00001),
             "profit" to position.profit,
-            "openTime" to position.openTime,
-            "createdAt" to Timestamp.now(),
-            "updatedAt" to Timestamp.now()
+            "openTime" to position.openTime.ifBlank { SriLankaMarketHours.formatDateTime() }.take(64),
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
         )
         position.sl?.let { if (it > 0.0) payload["sl"] = it }
         position.tp?.let { if (it > 0.0) payload["tp"] = it }
 
         try {
+            val existing = docRef.get().await()
+            if (existing.exists()) {
+                docRef.delete().await()
+            }
             docRef.set(payload).await()
             return docId
         } catch (e: CancellationException) {
@@ -307,10 +311,10 @@ class CloudTradeRepository(
         val docId = "pos_$positionId"
         val docRef = db.collection("users").document(userId).collection("positions").document(docId)
         val updates = mapOf(
-            "lots" to newLots,
-            "currentPrice" to currentPrice,
+            "lots" to newLots.coerceIn(0.01, 1000.0),
+            "currentPrice" to currentPrice.coerceAtLeast(0.00001),
             "profit" to newProfit,
-            "updatedAt" to Timestamp.now()
+            "updatedAt" to FieldValue.serverTimestamp()
         )
         try {
             docRef.update(updates).await()
@@ -392,8 +396,8 @@ class CloudTradeRepository(
             "closeTime" to safeCloseTime,
             "commission" to trade.commission,
             "swap" to trade.swap,
-            "createdAt" to Timestamp.now(),
-            "updatedAt" to Timestamp.now()
+            "createdAt" to FieldValue.serverTimestamp(),
+            "updatedAt" to FieldValue.serverTimestamp()
         )
     }
 
@@ -465,13 +469,13 @@ class CloudTradeRepository(
                     "realizedProfit" to account.realizedProfit,
                     "totalSwap" to account.totalSwap,
                     "totalCommission" to account.totalCommission,
-                    "accountName" to account.accountName,
-                    "brokerName" to account.brokerName,
-                    "accountId" to account.accountId,
-                    "serverName" to account.serverName,
+                    "accountName" to account.accountName.ifBlank { "Pasindu Jeewantha Pelanage" }.take(64),
+                    "brokerName" to account.brokerName.ifBlank { "Moneta Markets (Pty) Ltd" }.take(128),
+                    "accountId" to account.accountId.ifBlank { "36054607 - MonetaMarkets-Live" }.take(128),
+                    "serverName" to account.serverName.ifBlank { "AS08, Hedge" }.take(128),
                     "isReal" to account.isReal,
-                    "createdAt" to Timestamp.now(),
-                    "updatedAt" to Timestamp.now()
+                    "createdAt" to FieldValue.serverTimestamp(),
+                    "updatedAt" to FieldValue.serverTimestamp()
                 )
                 docRef.set(createPayload).await()
             } else {
@@ -481,12 +485,12 @@ class CloudTradeRepository(
                     "realizedProfit" to account.realizedProfit,
                     "totalSwap" to account.totalSwap,
                     "totalCommission" to account.totalCommission,
-                    "accountName" to account.accountName,
-                    "brokerName" to account.brokerName,
-                    "accountId" to account.accountId,
-                    "serverName" to account.serverName,
+                    "accountName" to account.accountName.ifBlank { "Pasindu Jeewantha Pelanage" }.take(64),
+                    "brokerName" to account.brokerName.ifBlank { "Moneta Markets (Pty) Ltd" }.take(128),
+                    "accountId" to account.accountId.ifBlank { "36054607 - MonetaMarkets-Live" }.take(128),
+                    "serverName" to account.serverName.ifBlank { "AS08, Hedge" }.take(128),
                     "isReal" to account.isReal,
-                    "updatedAt" to Timestamp.now()
+                    "updatedAt" to FieldValue.serverTimestamp()
                 )
                 docRef.update(updatePayload).await()
             }

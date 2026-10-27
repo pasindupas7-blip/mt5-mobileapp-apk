@@ -1,6 +1,8 @@
 package com.example.data
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.util.Log
 import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
@@ -21,23 +23,59 @@ import kotlinx.coroutines.tasks.await
 object GoogleAuthHelper {
     private const val TAG = "GoogleAuthHelper"
 
-    suspend fun signInWithGoogleButton(activityContext: Context): Result<FirebaseUser> {
-        return try {
-            val credentialManager = CredentialManager.create(activityContext)
-            val serverClientId = activityContext.getString(R.string.default_web_client_id)
+    private tailrec fun Context.findActivity(): Activity? = when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
+    }
 
-            val signInOption = GetSignInWithGoogleOption.Builder(serverClientId).build()
+    suspend fun signInWithGoogleButton(activityContext: Context): Result<FirebaseUser> {
+        val hostContext = activityContext.findActivity() ?: activityContext
+        val credentialManager = CredentialManager.create(hostContext)
+        val serverClientId = try {
+            hostContext.getString(R.string.default_web_client_id)
+        } catch (e: Exception) {
+            Log.e(TAG, "default_web_client_id not found", e)
+            return Result.failure(IllegalStateException("Google Sign-In configuration missing"))
+        }
+
+        return try {
+            val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = serverClientId).build()
             val request = GetCredentialRequest.Builder()
                 .addCredentialOption(signInOption)
                 .build()
 
             val result = credentialManager.getCredential(
-                context = activityContext,
+                context = hostContext,
                 request = request
             )
             handleSignInResult(result.credential)
         } catch (e: GetCredentialCancellationException) {
+            Log.w(TAG, "Google Sign-In cancelled or dismissed: ${e.message}", e)
             Result.failure(Exception("Sign-in cancelled"))
+        } catch (e: NoCredentialException) {
+            Log.w(TAG, "GetSignInWithGoogleOption returned NoCredentialException, trying unfiltered GoogleIdOption", e)
+            try {
+                val fallbackOption = GetGoogleIdOption.Builder()
+                    .setFilterByAuthorizedAccounts(false)
+                    .setServerClientId(serverClientId)
+                    .setAutoSelectEnabled(false)
+                    .build()
+                val fallbackRequest = GetCredentialRequest.Builder()
+                    .addCredentialOption(fallbackOption)
+                    .build()
+                val fallbackResult = credentialManager.getCredential(
+                    context = hostContext,
+                    request = fallbackRequest
+                )
+                handleSignInResult(fallbackResult.credential)
+            } catch (cancelEx: GetCredentialCancellationException) {
+                Log.w(TAG, "Google Sign-In fallback cancelled or dismissed: ${cancelEx.message}", cancelEx)
+                Result.failure(Exception("Sign-in cancelled"))
+            } catch (innerEx: Exception) {
+                Log.e(TAG, "Google Sign-In fallback failed: ${innerEx.message}", innerEx)
+                Result.failure(innerEx)
+            }
         } catch (e: GetCredentialException) {
             Log.e(TAG, "Google Sign-In failed: ${e.message}", e)
             Result.failure(e)
@@ -48,12 +86,13 @@ object GoogleAuthHelper {
     }
 
     suspend fun promptSignInIfEligible(activityContext: Context): Result<FirebaseUser> {
+        val hostContext = activityContext.findActivity() ?: activityContext
         return try {
-            val credentialManager = CredentialManager.create(activityContext)
-            val serverClientId = activityContext.getString(R.string.default_web_client_id)
+            val credentialManager = CredentialManager.create(hostContext)
+            val serverClientId = hostContext.getString(R.string.default_web_client_id)
 
             val googleIdOption = GetGoogleIdOption.Builder()
-                .setFilterByAuthorizedAccounts(false)
+                .setFilterByAuthorizedAccounts(true)
                 .setServerClientId(serverClientId)
                 .setAutoSelectEnabled(true)
                 .build()
@@ -63,13 +102,14 @@ object GoogleAuthHelper {
                 .build()
 
             val result = credentialManager.getCredential(
-                context = activityContext,
+                context = hostContext,
                 request = request
             )
             handleSignInResult(result.credential)
         } catch (e: NoCredentialException) {
             Result.failure(e)
         } catch (e: GetCredentialCancellationException) {
+            Log.w(TAG, "Silent Google Sign-In cancelled or dismissed: ${e.message}", e)
             Result.failure(e)
         } catch (e: Exception) {
             Result.failure(e)

@@ -207,17 +207,22 @@ fun CandlestickChart(
         }
     }
 
-    val axisDateFormat = remember {
-        SimpleDateFormat("dd MMM HH:mm", Locale.US).apply {
+    val axisDateFormat = remember(timeframeLabel) {
+        val pattern = if (timeframeLabel.uppercase(Locale.US) in listOf("D1", "W1", "MN")) {
+            "d MMM yyyy"
+        } else {
+            "d MMM HH:mm"
+        }
+        SimpleDateFormat(pattern, Locale.US).apply {
             timeZone = com.example.data.SriLankaMarketHours.SRI_LANKA_TIME_ZONE
         }
     }
 
     // Exact MT5 Dark Mode & Normal (Light) Mode colors from reference screenshots
     val bgColor = if (isDarkMode) Color(0xFF000000) else Color(0xFFFFFFFF)
-    val gridColor = if (isDarkMode) Color(0xFF1E222A) else Color(0xFFE5E7EB)
-    val axisBorderColor = if (isDarkMode) Color(0xFF2C313A) else Color(0xFFD1D5DB)
-    val axisTextColor = if (isDarkMode) Color(0xFF9CA3AF) else Color(0xFF6B7280)
+    val gridColor = if (isDarkMode) Color(0xFF1F242D) else Color(0xFFEBEBEB)
+    val axisBorderColor = if (isDarkMode) Color(0xFF2C313A) else Color(0xFFD5D7DB)
+    val axisTextColor = if (isDarkMode) Color(0xFFE5E7EB) else Color(0xFF1A1A1A)
     val overlayTitleColor = if (isDarkMode) Color(0xFFE5E7EB) else Color(0xFF374151)
     val overlaySubColor = if (isDarkMode) Color(0xFF9CA3AF) else Color(0xFF6B7280)
 
@@ -366,22 +371,27 @@ fun CandlestickChart(
                                     currentOnFit14DaysChange?.invoke(false)
                                 }
                                 val oldZoom = zoomScale
-                                val newZoom = (oldZoom * zoomChange).coerceIn(0.25f, 3.0f)
+                                val newZoom = (oldZoom * zoomChange).coerceIn(0.14f, 3.2f)
                                 val actualRatio = newZoom / oldZoom
                                 zoomScale = newZoom
 
-                                val centroid = event.calculateCentroid(useCurrent = false)
-                                val focusX = if (centroid != Offset.Unspecified) centroid.x else metrics.chartWidthPx * 0.5f
-                                val originX = metrics.candleOriginXPx
-                                panOffsetPx = ((originX + panOffsetPx - focusX) * actualRatio - originX + focusX)
-                                    .coerceIn(metrics.minPanBound, metrics.maxPanBound)
+                                if (panOffsetPx <= 4f) {
+                                    // Keep right-edge chart view anchored when zooming in/out near the live bar
+                                    panOffsetPx = 0f
+                                } else {
+                                    val centroid = event.calculateCentroid(useCurrent = false)
+                                    val focusX = if (centroid != Offset.Unspecified) centroid.x else metrics.chartWidthPx * 0.5f
+                                    val originX = metrics.candleOriginXPx
+                                    panOffsetPx = ((originX + panOffsetPx - focusX) * actualRatio - originX + focusX)
+                                        .coerceIn(metrics.minPanBound, metrics.maxPanBound)
+                                }
 
                                 event.changes.forEach { if (it.positionChanged()) it.consume() }
                             } else if (abs(panChange.x) > 0.1f) {
                                 if (currentIsFit14Days) {
-                                    val defaultSlotPx = 9.dp.toPx()
+                                    val defaultSlotPx = 9.5.dp.toPx()
                                     if (defaultSlotPx > 0f && metrics.totalCandleSlotPx > 0f) {
-                                        zoomScale = (metrics.totalCandleSlotPx / defaultSlotPx).coerceIn(0.25f, 3.0f)
+                                        zoomScale = (metrics.totalCandleSlotPx / defaultSlotPx).coerceIn(0.14f, 3.2f)
                                     }
                                     isFit14Days = false
                                     currentOnFit14DaysChange?.invoke(false)
@@ -439,19 +449,40 @@ fun CandlestickChart(
 
             if (chartWidth <= 0f || chartHeight <= 0f) return@Canvas
 
-            val rightMargin = if (isFit14Days) 20.dp.toPx() else 18.dp.toPx()
+            // Authentic MT5 right-side chart shift margin:
+            // Compact (~12dp) when zoomed in, expanding up to ~36% of chartWidth when zoomed out
+            // so the right future grid space is visible just like in Screenshots 1 and 4.
+            val zoomOutShiftFraction = if (isFit14Days) {
+                0f
+            } else if (zoomScale < 0.95f) {
+                ((0.95f - zoomScale) / 0.81f).coerceIn(0f, 1f)
+            } else {
+                0f
+            }
+            val rightMargin = if (isFit14Days) {
+                20.dp.toPx()
+            } else {
+                val baseMargin = 12.dp.toPx()
+                val maxZoomOutMargin = chartWidth * 0.36f
+                baseMargin + (maxZoomOutMargin - baseMargin) * zoomOutShiftFraction
+            }
             val candleOriginX = chartWidth - rightMargin
 
             val usableWidth = (chartWidth - rightMargin - 8.dp.toPx()).coerceAtLeast(60f)
             val totalCandleSlot = if (isFit14Days) {
-                (usableWidth / displayCandles.size.coerceAtLeast(1)).coerceIn(2.5.dp.toPx(), 16.dp.toPx())
+                (usableWidth / displayCandles.size.coerceAtLeast(1)).coerceIn(1.2.dp.toPx(), 16.dp.toPx())
             } else {
-                (8.5.dp.toPx() * zoomScale).coerceIn(2.5.dp.toPx(), 26.dp.toPx())
+                (9.5.dp.toPx() * zoomScale).coerceIn(1.2.dp.toPx(), 30.dp.toPx())
             }
-            val candleWidth = (totalCandleSlot * 0.66f).coerceAtLeast(2.0.dp.toPx())
+            val candleWidth = when {
+                totalCandleSlot < 2.6.dp.toPx() -> (totalCandleSlot * 0.62f).coerceAtLeast(1.0.dp.toPx())
+                totalCandleSlot < 5.0.dp.toPx() -> (totalCandleSlot * 0.65f).coerceAtLeast(1.6.dp.toPx())
+                else -> (totalCandleSlot * 0.70f).coerceAtLeast(2.2.dp.toPx())
+            }
+            val wickStrokeWidth = if (totalCandleSlot < 4.0.dp.toPx()) 0.85.dp.toPx() else 1.1.dp.toPx()
 
             val n = displayCandles.size
-            val computedMinPan = if (isFit14Days) 0f else -(chartWidth * 0.35f)
+            val computedMinPan = if (isFit14Days) 0f else -(chartWidth * 0.42f)
             val computedMaxPan = if (isFit14Days) {
                 0f
             } else {
@@ -551,95 +582,123 @@ fun CandlestickChart(
             }
 
             val rawRange = maxPrice - minPrice
-            val effectiveRange = if (rawRange <= 0.00001) {
-                val defaultStep = when (quote.digits) {
-                    5 -> 0.0010
-                    3 -> 0.10
-                    2 -> 1.00
-                    else -> 0.01
-                }
-                defaultStep * 10
+            val minPointStep = 1.0 / pointMultiplier
+            val effectiveRange = if (rawRange <= minPointStep * 10.0) {
+                minPointStep * 180.0
             } else {
                 rawRange
             }
-            val padding = effectiveRange * 0.12
-            val priceRange = effectiveRange + (padding * 2)
-            val baseMin = (minPrice - padding).coerceAtLeast(0.0)
+            // Smoothly expand vertical price padding when zooming out so the chart matches
+            // Screenshot 1 (medium zoom out) and Screenshot 4 (max zoom out)
+            val verticalZoomPaddingFactor = 0.11 + (zoomOutShiftFraction.toDouble() * 0.48)
+            val rawPadding = effectiveRange * verticalZoomPaddingFactor
+            val numHorizontalLines = 18
+            val topGridMargin = 13.dp.toPx()
+            val bottomGridMargin = 20.dp.toPx()
+            val gridSpanPx = (chartHeight - topGridMargin - bottomGridMargin).coerceAtLeast(100f)
+
+            // Round step between horizontal grid lines to exact symbol point precision so every grid row
+            // has a clean, uniform price step (just like 0.40, 0.75, 1.75, 8.20 in the MT5 screenshots)
+            val targetGridPriceSpan = effectiveRange + rawPadding * 2.0
+            val rawStepPerLine = targetGridPriceSpan / (numHorizontalLines - 1).toDouble()
+            val roundedStepPoints = max(1L, kotlin.math.round(rawStepPerLine * pointMultiplier).toLong())
+            val exactPriceStep = roundedStepPoints.toDouble() / pointMultiplier
+            val totalGridPriceSpan = exactPriceStep * (numHorizontalLines - 1).toDouble()
+
+            val midPrice = (minPrice + maxPrice) * 0.5
+            val topGridPrice = (kotlin.math.round((midPrice + totalGridPriceSpan * 0.5) * pointMultiplier) / pointMultiplier)
+            val bottomGridPrice = topGridPrice - totalGridPriceSpan
 
             fun priceToY(price: Double): Float {
-                return (chartHeight - ((price - baseMin) / priceRange * chartHeight)).toFloat()
+                val ratio = (topGridPrice - price) / totalGridPriceSpan
+                return (topGridMargin + ratio * gridSpanPx).toFloat()
             }
 
             fun yToPrice(y: Float): Double {
-                val ratio = (chartHeight - y) / chartHeight
-                return baseMin + (ratio * priceRange)
+                val ratio = (y - topGridMargin) / gridSpanPx
+                return topGridPrice - ratio * totalGridPriceSpan
             }
 
-            val gridDash = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx()), 0f)
+            val gridDash = PathEffect.dashPathEffect(floatArrayOf(3.5.dp.toPx(), 3.5.dp.toPx()), 0f)
 
-            // Draw 12 horizontal dashed price grid lines and right-axis price labels
-            val gridStepCount = 12
-            for (i in 0..gridStepCount) {
-                val y = (chartHeight / gridStepCount) * i
-                if (i in 1 until gridStepCount) {
-                    drawLine(
-                        color = gridColor,
-                        start = Offset(0f, y),
-                        end = Offset(chartWidth, y),
-                        strokeWidth = 1.dp.toPx(),
-                        pathEffect = gridDash
-                    )
-                }
+            // Draw 18 horizontal dashed price grid lines and crisp right-axis price labels
+            for (row in 0 until numHorizontalLines) {
+                val priceAtRow = topGridPrice - row * exactPriceStep
+                val y = topGridMargin + (gridSpanPx / (numHorizontalLines - 1).toFloat()) * row
 
-                // Skip very bottom label so ••• icon has clean space just like in the MT5 screenshot
-                if (i < gridStepCount) {
-                    val priceAtGrid = yToPrice(y)
-                    val priceStr = String.format(Locale.US, "%.${quote.digits}f", priceAtGrid)
-                    val labelY = (y - 6.dp.toPx()).coerceAtLeast(2.dp.toPx())
-                    drawText(
-                        textMeasurer = textMeasurer,
-                        text = priceStr,
-                        topLeft = Offset(chartWidth + 5.dp.toPx(), labelY),
-                        style = TextStyle(
-                            fontSize = 10.sp,
-                            color = axisTextColor,
-                            fontWeight = FontWeight.Normal
-                        )
-                    )
-                }
-            }
-
-            // Draw 4 vertical dashed time grid lines and bottom-axis timestamps ("23 Oct 22:58")
-            val verticalFractions = floatArrayOf(0.11f, 0.37f, 0.63f, 0.89f)
-            for (frac in verticalFractions) {
-                val x = chartWidth * frac
                 drawLine(
                     color = gridColor,
-                    start = Offset(x, 0f),
-                    end = Offset(x, chartHeight),
-                    strokeWidth = 1.dp.toPx(),
+                    start = Offset(0f, y),
+                    end = Offset(chartWidth, y),
+                    strokeWidth = 0.85.dp.toPx(),
                     pathEffect = gridDash
                 )
 
-                val floatIdx = floatLastIdx - ((candleOriginX + clampedPan - x) / totalCandleSlot)
-                val candleIdx = floatIdx.toInt().coerceIn(0, n - 1)
-                val c = displayCandles[candleIdx]
-                val timeLabel = if (c.timestamp > 0L) {
-                    axisDateFormat.format(Date(c.timestamp))
-                } else {
-                    c.time
-                }
-                val labelLeft = (x - 28.dp.toPx()).coerceIn(2.dp.toPx(), chartWidth - 62.dp.toPx())
+                val priceStr = String.format(Locale.US, "%.${quote.digits}f", priceAtRow)
+                val labelY = (y - 6.5.dp.toPx()).coerceIn(1.dp.toPx(), chartHeight - 16.dp.toPx())
                 drawText(
                     textMeasurer = textMeasurer,
-                    text = timeLabel,
-                    topLeft = Offset(labelLeft, chartHeight + 5.dp.toPx()),
+                    text = priceStr,
+                    topLeft = Offset(chartWidth + 4.5.dp.toPx(), labelY),
                     style = TextStyle(
-                        fontSize = 9.5.sp,
+                        fontSize = 10.2.sp,
                         color = axisTextColor,
                         fontWeight = FontWeight.Normal
                     )
                 )
+            }
+
+            // Draw candle-aligned vertical dashed time grid lines and bottom-axis timestamps
+            // (~4 vertical grid lines across chartWidth at every zoom level, projecting into the
+            // right-side future margin just like in Screenshots 1, 2, 3, and 4)
+            val targetVertSpacingPx = chartWidth / 3.85f
+            val barStep = max(1, kotlin.math.round(targetVertSpacingPx / totalCandleSlot).toInt())
+            val minK = floor((idxAtLeftEdge - (n - 1).toFloat()) / barStep.toFloat()).toInt() - 1
+            val maxK = ceil((idxAtRightEdge - (n - 1).toFloat()) / barStep.toFloat()).toInt() + 1
+            val lastCandleTs = displayCandles.last().timestamp
+            val firstCandleTs = displayCandles.first().timestamp
+
+            for (k in minK..maxK) {
+                val gridCandleIdx = (n - 1) + k * barStep
+                val x = candleOriginX - ((n - 1 - gridCandleIdx) * totalCandleSlot) + clampedPan
+                if (x < 1.dp.toPx() || x > chartWidth - 1.dp.toPx()) continue
+
+                drawLine(
+                    color = gridColor,
+                    start = Offset(x, 0f),
+                    end = Offset(x, chartHeight),
+                    strokeWidth = 0.85.dp.toPx(),
+                    pathEffect = gridDash
+                )
+
+                val tsAtGrid = when {
+                    gridCandleIdx in 0 until n -> displayCandles[gridCandleIdx].timestamp
+                    gridCandleIdx >= n && lastCandleTs > 0L -> lastCandleTs + (gridCandleIdx - (n - 1)).toLong() * tfIntervalMs
+                    gridCandleIdx < 0 && firstCandleTs > 0L -> firstCandleTs - (0 - gridCandleIdx).toLong() * tfIntervalMs
+                    else -> lastCandleTs
+                }
+                val timeLabel = if (tsAtGrid > 0L) {
+                    axisDateFormat.format(Date(tsAtGrid))
+                } else {
+                    displayCandles.last().time
+                }
+                val textLayout = textMeasurer.measure(
+                    text = timeLabel,
+                    style = TextStyle(
+                        fontSize = 10.sp,
+                        color = axisTextColor,
+                        fontWeight = FontWeight.Normal
+                    )
+                )
+                val centeredLeft = x - textLayout.size.width / 2f
+                if (centeredLeft + textLayout.size.width > 4.dp.toPx() && centeredLeft < chartWidth - 4.dp.toPx()) {
+                    clipRect(left = 0f, top = chartHeight, right = chartWidth, bottom = size.height) {
+                        drawText(
+                            textLayoutResult = textLayout,
+                            topLeft = Offset(centeredLeft, chartHeight + 4.dp.toPx())
+                        )
+                    }
+                }
             }
 
             // Draw Candlesticks and optional Moving Average inside plot clipRect
@@ -671,13 +730,13 @@ fun CandlestickChart(
                         color = candleColor,
                         start = Offset(x, highY),
                         end = Offset(x, lowY),
-                        strokeWidth = 1.2.dp.toPx()
+                        strokeWidth = wickStrokeWidth
                     )
 
                     // Body
                     val bodyTop = min(openY, closeY)
                     val bodyBottom = max(openY, closeY)
-                    val bodyHeight = max(2.0f, bodyBottom - bodyTop)
+                    val bodyHeight = max(1.5f, bodyBottom - bodyTop)
 
                     drawRect(
                         color = candleColor,

@@ -216,6 +216,58 @@ class LocalTradeStorage(context: Context) {
         return prefs.getLong(KEY_NEXT_ID, 1001L)
     }
 
+    fun saveCandles(symbol: String, timeframe: String, candles: List<com.example.model.Candle>) {
+        if (candles.isEmpty()) return
+        val recent = candles.takeLast(600)
+        val arr = JSONArray()
+        for (c in recent) {
+            if (c.timestamp <= 0L) continue
+            val obj = JSONObject().apply {
+                put("t", c.time)
+                put("ts", c.timestamp)
+                put("o", c.open)
+                put("h", c.high)
+                put("l", c.low)
+                put("c", c.close)
+            }
+            arr.put(obj)
+        }
+        val key = "${KEY_CANDLES_PREFIX}${symbol.uppercase()}_${timeframe.uppercase()}"
+        prefs.edit().putString(key, arr.toString()).apply()
+    }
+
+    fun loadCandles(symbol: String, timeframe: String): List<com.example.model.Candle> {
+        val key = "${KEY_CANDLES_PREFIX}${symbol.uppercase()}_${timeframe.uppercase()}"
+        val raw = prefs.getString(key, null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(raw)
+            val list = ArrayList<com.example.model.Candle>(arr.length())
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val ts = obj.optLong("ts", 0L)
+                val o = obj.optDouble("o", 0.0)
+                val h = obj.optDouble("h", 0.0)
+                val l = obj.optDouble("l", 0.0)
+                val c = obj.optDouble("c", 0.0)
+                if (ts > 0L && o > 0.0 && h > 0.0 && l > 0.0 && c > 0.0) {
+                    list.add(
+                        com.example.model.Candle(
+                            time = obj.optString("t", ""),
+                            timestamp = ts,
+                            open = o,
+                            high = h,
+                            low = l,
+                            close = c
+                        )
+                    )
+                }
+            }
+            list
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
     fun clearAll() {
         prefs.edit().clear().apply()
     }
@@ -227,5 +279,6 @@ class LocalTradeStorage(context: Context) {
         private const val KEY_ACCOUNT = "account_info_json"
         private const val KEY_NEXT_ID = "next_position_id"
         private const val KEY_SEEDED_DEFAULT_HISTORY = "seeded_default_history_v1"
+        private const val KEY_CANDLES_PREFIX = "chart_candles_v2_"
     }
 }
