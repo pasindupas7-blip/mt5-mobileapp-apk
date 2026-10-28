@@ -28,6 +28,9 @@ class CandleAggregator(
 
     @Synchronized
     fun seedHistory(initialCandles: List<Candle>) {
+        val prevActive = candles.lastOrNull()
+        val prevBucket = currentBucketStart
+
         candles.clear()
         // Strictly keep only candles that fall inside Monday 03:30 .. Saturday 02:29 Sri Lanka Time
         val validOpenMarketCandles = initialCandles.filter { candle ->
@@ -41,6 +44,23 @@ class CandleAggregator(
             } else {
                 val clampedNow = SriLankaMarketHours.clampToLastOpenMarketTimestamp(System.currentTimeMillis())
                 (clampedNow / intervalMillis) * intervalMillis
+            }
+
+            // Preserve accumulated live high/low/close on the active candle only if re-seeded from the same open price
+            if (prevActive != null && prevBucket > 0L && prevBucket == currentBucketStart) {
+                val seededLast = candles.last()
+                if (kotlin.math.abs(prevActive.open - seededLast.open) <= 1e-5) {
+                    val liveOpen = seededLast.open
+                    val liveClose = prevActive.close
+                    val liveHigh = max(max(seededLast.high, prevActive.high), max(liveOpen, liveClose))
+                    val liveLow = min(min(seededLast.low, prevActive.low), min(liveOpen, liveClose))
+                    candles[candles.lastIndex] = seededLast.copy(
+                        open = liveOpen,
+                        high = liveHigh,
+                        low = liveLow,
+                        close = liveClose
+                    )
+                }
             }
         }
     }
@@ -79,32 +99,60 @@ class CandleAggregator(
         }
 
         if (currentBucketStart < 0L) {
-            currentBucketStart = bucket
+            currentBucketStart = (candles.last().timestamp / intervalMillis) * intervalMillis
+            if (currentBucketStart <= 0L) currentBucketStart = bucket
         }
 
         val effectivePrice: Double
         if (bucket > currentBucketStart) {
-            // Finalize previous candle and open a new candle anchored to previous close for continuity
-            val prevClose = candles.last().close
-            val boundedClose = price.coerceIn(prevClose - maxCandleExcursion, prevClose + maxCandleExcursion)
-            val newHigh = max(prevClose, boundedClose)
-            val newLow = min(prevClose, boundedClose)
+            var runningPrevClose = candles.last().close
+            val boundedTarget = price.coerceIn(
+                runningPrevClose - maxCandleExcursion,
+                runningPrevClose + maxCandleExcursion
+            )
+
+            // If more than 1 interval elapsed (e.g. up to 15 bars on M1/M5/M15/M30), step through intermediate buckets
+            val gapSteps = ((bucket - currentBucketStart) / intervalMillis).toInt()
+            if (gapSteps in 2..15) {
+                for (step in 1 until gapSteps) {
+                    val midBucket = currentBucketStart + step * intervalMillis
+                    if (!SriLankaMarketHours.isMarketOpen(midBucket)) continue
+                    val frac = step.toDouble() / gapSteps.toDouble()
+                    val midClose = runningPrevClose + (boundedTarget - runningPrevClose) * frac
+                    val midWick = kotlin.math.abs(midClose - runningPrevClose).coerceAtLeast(runningPrevClose * 0.00008) * 0.35
+                    candles.add(
+                        Candle(
+                            time = SriLankaMarketHours.formatCandleTime(midBucket, intervalMillis),
+                            timestamp = midBucket,
+                            open = runningPrevClose,
+                            high = max(runningPrevClose, midClose) + midWick,
+                            low = (min(runningPrevClose, midClose) - midWick).coerceAtLeast(0.00001),
+                            close = midClose
+                        )
+                    )
+                    runningPrevClose = midClose
+                }
+            }
+
+            // Open the new active candle anchored to previous close for seamless lower-timeframe continuity
+            val newHigh = max(runningPrevClose, boundedTarget)
+            val newLow = min(runningPrevClose, boundedTarget)
 
             currentBucketStart = bucket
             candles.add(
                 Candle(
                     time = formattedTime,
                     timestamp = bucket,
-                    open = prevClose,
+                    open = runningPrevClose,
                     high = newHigh,
                     low = newLow,
-                    close = boundedClose
+                    close = boundedTarget
                 )
             )
-            if (candles.size > maxCandles) {
+            while (candles.size > maxCandles) {
                 candles.removeAt(0)
             }
-            effectivePrice = boundedClose
+            effectivePrice = boundedTarget
         } else {
             // Update current active candle (open stays fixed; high/low/close update within realistic range)
             val lastIndex = candles.lastIndex

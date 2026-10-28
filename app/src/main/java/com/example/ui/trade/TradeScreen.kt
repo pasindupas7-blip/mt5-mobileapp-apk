@@ -38,12 +38,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.TradePosition
 import com.example.ui.components.MT5HamburgerButton
+import com.example.ui.theme.MT5RobotoCondensedFontFamily
+import com.example.ui.theme.MT5RobotoFontFamily
 import com.example.ui.theme.MT5Separator
 import com.example.viewmodel.TradingViewModel
 import java.util.Locale
 
-private val MT5TradeBlue = Color(0xFF0A60C2)
-private val MT5TradeRed = Color(0xFFC62828)
+private val MT5TradeBlue = Color(0xFF0D62C6)
+private val MT5TradeRed = Color(0xFFB71C1C)
 
 /**
  * Formats numbers with MT5's space thousands separator (e.g. 4917.16 -> "4 917.16", 28910.88 -> "28 910.88").
@@ -286,8 +288,9 @@ fun DottedMetricRow(label: String, value: String) {
     ) {
         Text(
             text = label,
+            fontFamily = MT5RobotoFontFamily,
             fontSize = 15.sp,
-            color = Color(0xFF1C1C1E),
+            color = Color(0xFF111111),
             fontWeight = FontWeight.Bold
         )
 
@@ -298,13 +301,13 @@ fun DottedMetricRow(label: String, value: String) {
                 .padding(horizontal = 8.dp)
                 .height(14.dp)
         ) {
-            val dotRadius = 1.1.dp.toPx()
-            val step = 6.5.dp.toPx()
+            val dotRadius = 0.85.dp.toPx()
+            val step = 6.dp.toPx()
             val y = size.height * 0.72f
             var x = step
             while (x < size.width - step / 2f) {
                 drawCircle(
-                    color = Color(0xFFD0D5DD),
+                    color = Color(0xFFD5D8DC),
                     radius = dotRadius,
                     center = Offset(x, y)
                 )
@@ -314,8 +317,9 @@ fun DottedMetricRow(label: String, value: String) {
 
         Text(
             text = value,
+            fontFamily = MT5RobotoFontFamily,
             fontSize = 15.sp,
-            color = Color(0xFF1C1C1E),
+            color = Color(0xFF111111),
             fontWeight = FontWeight.Bold
         )
     }
@@ -331,34 +335,42 @@ fun PositionRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
             .testTag("position_item_${position.id}"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.Bottom) {
                 Text(
                     text = "${position.symbol}, ",
-                    fontSize = 15.5.sp,
+                    fontFamily = MT5RobotoCondensedFontFamily,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF1C1C1E)
+                    color = Color(0xFF111111),
+                    lineHeight = 19.sp,
+                    modifier = Modifier.alignByBaseline()
                 )
                 val typeColor = if (position.isBuy) MT5TradeBlue else MT5TradeRed
                 Text(
                     text = "${if (position.isBuy) "buy" else "sell"} ${String.format(Locale.US, "%.2f", position.lots)}",
-                    fontSize = 15.5.sp,
-                    fontWeight = FontWeight.Normal,
-                    color = typeColor
+                    fontFamily = MT5RobotoCondensedFontFamily,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = typeColor,
+                    lineHeight = 19.sp,
+                    modifier = Modifier.alignByBaseline()
                 )
             }
 
             Text(
                 text = "${formatMt5SpaceNumber(position.openPrice, digits)} \u2192 ${formatMt5SpaceNumber(position.currentPrice, digits)}",
-                fontSize = 14.5.sp,
+                fontFamily = MT5RobotoCondensedFontFamily,
+                fontSize = 16.5.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFF6E7378),
-                modifier = Modifier.padding(top = 2.dp)
+                lineHeight = 18.5.sp,
+                modifier = Modifier.padding(top = 1.dp)
             )
         }
 
@@ -367,7 +379,8 @@ fun PositionRow(
 
         Text(
             text = formatMt5SpaceNumber(position.profit, 2),
-            fontSize = 16.5.sp,
+            fontFamily = MT5RobotoFontFamily,
+            fontSize = 15.5.sp,
             fontWeight = FontWeight.Bold,
             color = profitColor
         )

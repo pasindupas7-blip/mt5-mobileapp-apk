@@ -721,16 +721,26 @@ class TradingRepository(private val scope: CoroutineScope) {
                 val real14dCandles = fastForexService.fetch14DayCandles(symbol, timeframe, liveBid)
                 if (real14dCandles.isNotEmpty()) {
                     val key = cacheKey(symbol, timeframe)
-                    val savedFromDisk = localStorage?.loadCandles(symbol, timeframe.name).orEmpty()
-                    val withSaved = mergeCandleListsByBucket(real14dCandles, savedFromDisk, timeframe)
+                    val unitRange = fastForexService.getNaturalM1Range(symbol) *
+                        fastForexService.getTimeframeTickScale(timeframe)
+                    val lastReal = real14dCandles.last()
 
-                    // Preserve any live session candles already formed in candleAggregator or candleMap
+                    // Only append live session candles that formed strictly after the latest real API bucket
+                    // and whose open connects cleanly to the latest real API close
                     val existingInMemory = if (currentActiveSymbol == symbol && currentActiveTimeframe == timeframe) {
                         candleAggregator.getCandles().ifEmpty { candleMap[key].orEmpty() }
                     } else {
                         candleMap[key].orEmpty()
                     }
-                    val mergedBase = mergeCandleListsByBucket(withSaved, existingInMemory, timeframe)
+                    val recentLiveOverlay = existingInMemory.filter { c ->
+                        c.timestamp > lastReal.timestamp && abs(c.open - lastReal.close) <= unitRange * 2.0
+                    }
+
+                    val mergedBase = if (recentLiveOverlay.isNotEmpty()) {
+                        mergeCandleListsByBucket(real14dCandles, recentLiveOverlay, timeframe)
+                    } else {
+                        real14dCandles
+                    }
                     val syncedCandles = syncTradesIntoCandles(symbol, timeframe, mergedBase)
                     candleMap[key] = syncedCandles.toMutableList()
                     localStorage?.saveCandles(symbol, timeframe.name, syncedCandles)
@@ -775,15 +785,14 @@ class TradingRepository(private val scope: CoroutineScope) {
         val liveBid = fastForexService.getLivePrice(symbol).takeIf { it > 0.0 } ?: q.bid
         val cached = candleMap[key]
         val saved = localStorage?.loadCandles(symbol, currentActiveTimeframe.name).orEmpty()
-        val initialDisplay = if (cached != null && cached.isNotEmpty()) {
-            val merged = mergeCandleListsByBucket(cached, saved, currentActiveTimeframe)
-            syncTradesIntoCandles(symbol, currentActiveTimeframe, merged)
-        } else {
-            val generated = generateInitialCandles(q.copy(bid = liveBid), currentActiveTimeframe)
-            val merged = mergeCandleListsByBucket(generated, saved, currentActiveTimeframe)
-            val synced = syncTradesIntoCandles(symbol, currentActiveTimeframe, merged)
-            candleMap[key] = synced.toMutableList()
-            synced
+        val initialDisplay = when {
+            cached != null && cached.isNotEmpty() -> syncTradesIntoCandles(symbol, currentActiveTimeframe, cached)
+            saved.isNotEmpty() -> syncTradesIntoCandles(symbol, currentActiveTimeframe, saved)
+            else -> {
+                val generated = generateInitialCandles(q.copy(bid = liveBid), currentActiveTimeframe)
+                candleMap[key] = generated.toMutableList()
+                generated
+            }
         }
         candleMap[key] = initialDisplay.toMutableList()
         candleAggregator.seedHistory(initialDisplay)
@@ -805,15 +814,14 @@ class TradingRepository(private val scope: CoroutineScope) {
         val liveBid = fastForexService.getLivePrice(currentActiveSymbol).takeIf { it > 0.0 } ?: q.bid
         val cached = candleMap[key]
         val saved = localStorage?.loadCandles(currentActiveSymbol, timeframe.name).orEmpty()
-        val initialDisplay = if (cached != null && cached.isNotEmpty()) {
-            val merged = mergeCandleListsByBucket(cached, saved, timeframe)
-            syncTradesIntoCandles(currentActiveSymbol, timeframe, merged)
-        } else {
-            val generated = generateInitialCandles(q.copy(bid = liveBid), timeframe)
-            val merged = mergeCandleListsByBucket(generated, saved, timeframe)
-            val synced = syncTradesIntoCandles(currentActiveSymbol, timeframe, merged)
-            candleMap[key] = synced.toMutableList()
-            synced
+        val initialDisplay = when {
+            cached != null && cached.isNotEmpty() -> syncTradesIntoCandles(currentActiveSymbol, timeframe, cached)
+            saved.isNotEmpty() -> syncTradesIntoCandles(currentActiveSymbol, timeframe, saved)
+            else -> {
+                val generated = generateInitialCandles(q.copy(bid = liveBid), timeframe)
+                candleMap[key] = generated.toMutableList()
+                generated
+            }
         }
         candleMap[key] = initialDisplay.toMutableList()
         candleAggregator.seedHistory(initialDisplay)
@@ -833,9 +841,7 @@ class TradingRepository(private val scope: CoroutineScope) {
 
     /**
      * Synchronizes historical trades (`_history`) and running open positions (`_positions`) for [symbol]
-     * into the candlestick series for [timeframe] WITHOUT overwriting or flattening the real candlesticks
-     * that formed while a trade was running, and generates a complete surrounding candle context for
-     * older historical trades so scrolling back to old charts always renders properly.
+     * into the candlestick series for [timeframe] WITHOUT overwriting or distorting the real market candlesticks.
      */
     fun syncTradesIntoCandles(
         symbol: String,
@@ -861,7 +867,9 @@ class TradingRepository(private val scope: CoroutineScope) {
             }
         }
 
-        // 1. Anchor all closed HistoryTrades for this symbol (including older historical trades)
+        val earliestRealBucket = bucketMap.keys.minOrNull() ?: Long.MAX_VALUE
+
+        // 1. Anchor closed HistoryTrades for this symbol without overwriting real market candles
         for (trade in symbolTrades) {
             val rawOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(trade.openTime)
             val rawCloseMs = SriLankaMarketHours.parseMt5DateTimeMillis(trade.closeTime)
@@ -879,25 +887,22 @@ class TradingRepository(private val scope: CoroutineScope) {
             val existingOpen = bucketMap[openBucket]
             val existingClose = bucketMap[closeBucket]
 
-            val openAlreadyAligned = existingOpen != null &&
-                abs(existingOpen.close - trade.openPrice) <= unitRange * 12.0
-            val closeAlreadyAligned = existingClose != null &&
-                abs(existingClose.close - trade.closePrice) <= unitRange * 12.0
-
-            // When candles already exist in this price neighborhood (e.g., a live trade that ran and closed,
-            // or a trade added on existing chart candles), NEVER overwrite open/close or intermediate candles!
-            // Only ensure the entry and exit candles' high/low range includes trade.openPrice / trade.closePrice.
-            if (openAlreadyAligned && closeAlreadyAligned) {
-                val entryC = bucketMap[openBucket]!!
-                bucketMap[openBucket] = entryC.copy(
-                    high = max(entryC.high, trade.openPrice),
-                    low = min(entryC.low, trade.openPrice).coerceAtLeast(minPoint)
-                )
-                val exitC = bucketMap[closeBucket]!!
-                bucketMap[closeBucket] = exitC.copy(
-                    high = max(exitC.high, trade.closePrice),
-                    low = min(exitC.low, trade.closePrice).coerceAtLeast(minPoint)
-                )
+            // If real market candles already exist at openBucket or closeBucket, NEVER overwrite the real candles!
+            // Only expand high/low wick if the trade price is within the real candle's neighborhood.
+            if (existingOpen != null || existingClose != null || openBucket >= earliestRealBucket) {
+                if (existingOpen != null && abs(existingOpen.close - trade.openPrice) <= unitRange * 12.0) {
+                    bucketMap[openBucket] = existingOpen.copy(
+                        high = max(existingOpen.high, trade.openPrice),
+                        low = min(existingOpen.low, trade.openPrice).coerceAtLeast(minPoint)
+                    )
+                }
+                val currentExit = bucketMap[closeBucket]
+                if (currentExit != null && abs(currentExit.close - trade.closePrice) <= unitRange * 12.0) {
+                    bucketMap[closeBucket] = currentExit.copy(
+                        high = max(currentExit.high, trade.closePrice),
+                        low = min(currentExit.low, trade.closePrice).coerceAtLeast(minPoint)
+                    )
+                }
                 continue
             }
 
@@ -1060,7 +1065,7 @@ class TradingRepository(private val scope: CoroutineScope) {
                     high = max(existing.high, pos.openPrice),
                     low = min(existing.low, pos.openPrice).coerceAtLeast(minPoint)
                 )
-            } else if (existing == null) {
+            } else if (existing == null && openBucket < earliestRealBucket) {
                 val built = fastForexService.buildSingleM1CandleAt(cleanSym, openBucket, pos.openPrice)
                 bucketMap[openBucket] = built.copy(
                     high = max(built.high, pos.openPrice),
@@ -1919,24 +1924,31 @@ class TradingRepository(private val scope: CoroutineScope) {
         nextPositionId = max(local.loadNextPositionId(), maxLocalId + 1L)
         recalculatePositionsAndAccount(_quotes.value)
 
-        // Restore persisted chart candles for the active symbol & any traded symbols immediately
+        // Restore persisted real chart candles for the active symbol & any traded symbols immediately
         val tradedSymbols = buildSet {
             add(currentActiveSymbol)
             _positions.value.forEach { add(it.symbol.uppercase(Locale.US)) }
             _history.value.filter { !it.isWithdrawal }.forEach { add(it.symbol.uppercase(Locale.US)) }
         }
         for (sym in tradedSymbols) {
+            var hasSavedCandlesForSymbol = false
             Timeframe.values().forEach { tf ->
                 val savedCandles = local.loadCandles(sym, tf.name)
                 if (savedCandles.isNotEmpty()) {
+                    hasSavedCandlesForSymbol = true
                     val key = cacheKey(sym, tf)
-                    val existing = candleMap[key].orEmpty()
-                    val merged = mergeCandleListsByBucket(existing, savedCandles, tf)
-                    candleMap[key] = merged.toMutableList()
+                    candleMap[key] = savedCandles.toMutableList()
+                    if (sym == currentActiveSymbol && tf == currentActiveTimeframe) {
+                        candleAggregator.seedHistory(savedCandles)
+                        _selectedPairCandles.value = candleAggregator.getCandles()
+                    }
                 }
             }
-            refreshSymbolCandlesWithTrades(sym)
+            if (hasSavedCandlesForSymbol) {
+                refreshSymbolCandlesWithTrades(sym)
+            }
         }
+        load14DayHistoricalCandles(currentActiveSymbol, currentActiveTimeframe)
 
         // 2. Attach Firebase Auth & Firestore Cloud Server sync off the main UI thread
         scope.launch(Dispatchers.IO) {

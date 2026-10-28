@@ -279,6 +279,6 @@ class LocalTradeStorage(context: Context) {
         private const val KEY_ACCOUNT = "account_info_json"
         private const val KEY_NEXT_ID = "next_position_id"
         private const val KEY_SEEDED_DEFAULT_HISTORY = "seeded_default_history_v1"
-        private const val KEY_CANDLES_PREFIX = "chart_candles_v2_"
+        private const val KEY_CANDLES_PREFIX = "chart_candles_real_v6_"
     }
 }

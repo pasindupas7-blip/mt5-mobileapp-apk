@@ -51,6 +51,8 @@ import androidx.compose.ui.unit.sp
 import com.example.data.SriLankaMarketHours
 import com.example.model.TradeHitOutcome
 import com.example.ui.components.MT5HamburgerButton
+import com.example.ui.theme.MT5RobotoCondensedFontFamily
+import com.example.ui.theme.MT5RobotoFontFamily
 import com.example.ui.trade.MT5SortArrowsIcon
 import com.example.viewmodel.TradingViewModel
 import java.text.DecimalFormat
@@ -200,17 +202,19 @@ fun HistoryScreen(
                     Column {
                         Text(
                             text = "History",
-                            fontSize = 12.sp,
+                            fontFamily = MT5RobotoCondensedFontFamily,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
-                            color = Color(0xFF1C1C1E),
+                            color = Color(0xFF111111),
                             lineHeight = 14.sp
                         )
                         Text(
                             text = "All symbols",
-                            fontSize = 16.sp,
+                            fontFamily = MT5RobotoCondensedFontFamily,
+                            fontSize = 17.5.sp,
                             fontWeight = FontWeight.Normal,
-                            color = Color(0xFF70757A),
-                            lineHeight = 18.sp
+                            color = Color(0xFF6E7378),
+                            lineHeight = 19.sp
                         )
                     }
                 }
@@ -247,7 +251,7 @@ fun HistoryScreen(
                         MT5SortArrowsIcon(color = if (sortAscending) Color(0xFF494D52) else Color(0xFF1A73E8))
                     }
 
-                    // 3. Calendar Period Filter Icon (shows "3" badge when Last 3 months is active)
+                    // 3. Calendar Period Filter Icon
                     Box(
                         modifier = Modifier
                             .size(32.dp)
@@ -259,7 +263,7 @@ fun HistoryScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         when (selectedPeriod) {
-                            HistoryPeriod.LAST_3_MONTHS -> MT5Calendar3Icon(color = Color(0xFF494D52))
+                            HistoryPeriod.LAST_3_MONTHS -> MT5CalendarMonthIcon(color = Color(0xFF494D52))
                             HistoryPeriod.LAST_WEEK -> MT5CalendarWeekIcon(color = Color(0xFF494D52))
                             HistoryPeriod.LAST_MONTH -> MT5CalendarMonthIcon(color = Color(0xFF494D52))
                             HistoryPeriod.CUSTOM -> MT5CalendarCustomIcon(color = Color(0xFF494D52))
@@ -292,15 +296,16 @@ fun HistoryScreen(
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = segment.label,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = if (isSelected) Color(0xFF1C1C1E) else Color(0xFF70757A)
+                            fontFamily = MT5RobotoCondensedFontFamily,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Normal,
+                            color = if (isSelected) Color(0xFF111111) else Color(0xFF70757A)
                         )
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(2.5.dp)
-                                .background(if (isSelected) Color(0xFF1A73E8) else Color.Transparent)
+                                .height(2.dp)
+                                .background(if (isSelected) Color(0xFF1E88E5) else Color.Transparent)
                         )
                     }
                 }
@@ -328,6 +333,7 @@ fun HistoryScreen(
                         Spacer(modifier = Modifier.height(18.dp))
                         Text(
                             text = "Empty history",
+                            fontFamily = MT5RobotoFontFamily,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Normal,
                             color = Color(0xFF9E9E9E)
@@ -346,44 +352,44 @@ fun HistoryScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(Color.White)
-                                .padding(horizontal = 14.dp, vertical = 10.dp)
+                                .padding(start = 14.dp, end = 14.dp, top = 14.dp, bottom = 12.dp)
                         ) {
                             HistoryDottedSummaryRow(
                                 label = "Profit:",
                                 value = String.format(Locale.US, "%.2f", totalProfit),
-                                valueColor = if (totalProfit < 0) Color(0xFFC62828) else Color(0xFF1565C0)
+                                valueColor = if (totalProfit < 0) Color(0xFFB71C1C) else Color(0xFF0D62C6)
                             )
-                            Spacer(modifier = Modifier.height(7.dp))
+                            Spacer(modifier = Modifier.height(7.5.dp))
                             HistoryDottedSummaryRow(
                                 label = "Deposit",
                                 value = String.format(Locale.US, "%.2f", depositAmount),
-                                valueColor = Color(0xFF1C1C1E)
+                                valueColor = Color(0xFF111111)
                             )
                             if (totalWithdrawal > 0.0) {
-                                Spacer(modifier = Modifier.height(7.dp))
+                                Spacer(modifier = Modifier.height(7.5.dp))
                                 HistoryDottedSummaryRow(
                                     label = "Withdrawal:",
                                     value = String.format(Locale.US, "-%.2f", totalWithdrawal),
-                                    valueColor = Color(0xFFC62828)
+                                    valueColor = Color(0xFFB71C1C)
                                 )
                             }
-                            Spacer(modifier = Modifier.height(7.dp))
+                            Spacer(modifier = Modifier.height(7.5.dp))
                             HistoryDottedSummaryRow(
                                 label = "Swap:",
                                 value = "0.00",
-                                valueColor = Color(0xFF1C1C1E)
+                                valueColor = Color(0xFF111111)
                             )
-                            Spacer(modifier = Modifier.height(7.dp))
+                            Spacer(modifier = Modifier.height(7.5.dp))
                             HistoryDottedSummaryRow(
                                 label = "Commission:",
                                 value = "0.00",
-                                valueColor = Color(0xFF1C1C1E)
+                                valueColor = Color(0xFF111111)
                             )
-                            Spacer(modifier = Modifier.height(7.dp))
+                            Spacer(modifier = Modifier.height(7.5.dp))
                             HistoryDottedSummaryRow(
                                 label = "Balance:",
                                 value = String.format(Locale.US, "%.2f", calculatedBalance),
-                                valueColor = Color(0xFF1C1C1E)
+                                valueColor = Color(0xFF111111)
                             )
                         }
                         HorizontalDivider(thickness = 0.7.dp, color = Color(0xFFE5E7EB))
@@ -412,7 +418,7 @@ fun HistoryScreen(
             }
         }
 
-        // Top-Right Calendar Period Popup Menu matching Screenshot 3 (860570076_2501295170350386_1020823167866266691_n.jpg)
+        // Top-Right Calendar Period Popup Menu matching Screenshot 3
         if (showPeriodMenu) {
             Box(
                 modifier = Modifier
@@ -470,6 +476,7 @@ fun HistoryScreen(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = period.title,
+                                        fontFamily = MT5RobotoFontFamily,
                                         fontSize = 16.sp,
                                         fontWeight = FontWeight.Normal,
                                         color = Color(0xFF1C1C1E)
@@ -478,6 +485,7 @@ fun HistoryScreen(
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Text(
                                             text = period.subtitle,
+                                            fontFamily = MT5RobotoFontFamily,
                                             fontSize = 13.5.sp,
                                             fontWeight = FontWeight.Normal,
                                             color = Color(0xFF70757A)
@@ -531,9 +539,11 @@ private fun HistoryDottedSummaryRow(
     ) {
         Text(
             text = label,
+            fontFamily = MT5RobotoFontFamily,
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
-            color = Color(0xFF1C1C1E)
+            color = Color(0xFF111111),
+            lineHeight = 18.sp
         )
 
         // Dotted leader line (. . . . . . .)
@@ -548,8 +558,8 @@ private fun HistoryDottedSummaryRow(
             var x = 2.dp.toPx()
             while (x < size.width - 2.dp.toPx()) {
                 drawCircle(
-                    color = Color(0xFFD0D4D9),
-                    radius = 0.9.dp.toPx(),
+                    color = Color(0xFFD5D8DC),
+                    radius = 0.85.dp.toPx(),
                     center = Offset(x, y)
                 )
                 x += step
@@ -558,9 +568,11 @@ private fun HistoryDottedSummaryRow(
 
         Text(
             text = value,
+            fontFamily = MT5RobotoFontFamily,
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
-            color = valueColor
+            color = valueColor,
+            lineHeight = 18.sp
         )
     }
 }
@@ -602,45 +614,59 @@ private fun MT5HistoryPositionRow(
         Column(
             modifier = Modifier
                 .weight(1f)
-                .padding(start = 10.dp, end = 14.dp, top = 8.dp, bottom = 8.dp)
+                .padding(start = 10.dp, end = 14.dp, top = 6.dp, bottom = 6.dp)
         ) {
             if (item.isWithdrawal) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
                 ) {
-                    Column {
-                        Text(
-                            text = "Balance",
-                            fontSize = 15.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF1C1C1E)
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = item.comment.ifBlank { "Withdrawal" },
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Normal,
-                            color = Color(0xFF6E7378)
-                        )
-                    }
+                    Text(
+                        text = "Balance",
+                        fontFamily = MT5RobotoCondensedFontFamily,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF111111),
+                        lineHeight = 19.sp,
+                        modifier = Modifier.alignByBaseline()
+                    )
+                    Text(
+                        text = item.closeTime,
+                        fontFamily = MT5RobotoCondensedFontFamily,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Normal,
+                        color = Color(0xFF6E7378),
+                        lineHeight = 16.sp,
+                        modifier = Modifier.alignByBaseline()
+                    )
+                }
 
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = item.closeTime,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.Normal,
-                            color = Color(0xFF70757A)
-                        )
-                        Spacer(modifier = Modifier.height(3.dp))
-                        Text(
-                            text = String.format(Locale.US, "-%.2f", abs(item.profit)),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFC62828)
-                        )
-                    }
+                Spacer(modifier = Modifier.height(1.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    Text(
+                        text = item.comment.ifBlank { "Withdrawal" },
+                        fontFamily = MT5RobotoCondensedFontFamily,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF6E7378),
+                        lineHeight = 18.sp,
+                        modifier = Modifier.alignByBaseline()
+                    )
+                    Text(
+                        text = String.format(Locale.US, "-%.2f", abs(item.profit)),
+                        fontFamily = MT5RobotoFontFamily,
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFB71C1C),
+                        lineHeight = 17.sp,
+                        modifier = Modifier.alignByBaseline()
+                    )
                 }
 
                 if (isExpanded) {
@@ -651,73 +677,92 @@ private fun MT5HistoryPositionRow(
                     ) {
                         Text(
                             text = item.ticketId,
+                            fontFamily = MT5RobotoCondensedFontFamily,
                             fontSize = 13.sp,
                             color = Color(0xFF70757A)
                         )
                         Text(
                             text = "Deal: ${item.comment.ifBlank { "Withdrawal" }}",
+                            fontFamily = MT5RobotoCondensedFontFamily,
                             fontSize = 13.sp,
                             color = Color(0xFF70757A)
                         )
                     }
                 }
             } else {
-                // Main 2-Line Trade Row
+                // Line 1: Left = [NDX100, sell 0.01] (Roboto Condensed Bold 17sp) | Right = [2026.09.30 16:55:07] (Roboto Condensed Regular 13.5sp)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
                 ) {
-                    // Left Column: [NDX100, sell 0.01] and [27 548.11 → 27 471.52]
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "${item.symbol}, ",
-                                fontSize = 15.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF1C1C1E)
-                            )
-                            val typeColor = if (item.isBuy) Color(0xFF1565C0) else Color(0xFFC62828)
-                            Text(
-                                text = "${if (item.isBuy) "buy" else "sell"} ${String.format(Locale.US, "%.2f", item.lots)}",
-                                fontSize = 15.5.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = typeColor
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(2.dp))
-
+                    Row(
+                        modifier = Modifier.alignByBaseline(),
+                        verticalAlignment = Alignment.Bottom
+                    ) {
                         Text(
-                            text = "${formatMT5HistoryPrice(item.openPrice, item.digits)} \u2192 ${formatMT5HistoryPrice(item.closePrice, item.digits)}",
-                            fontSize = 14.5.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Color(0xFF6E7378)
-                        )
-                    }
-
-                    // Right Column: Top = Timestamp, Bottom = Profit
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = item.closeTime,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.Normal,
-                            color = Color(0xFF70757A)
-                        )
-
-                        Spacer(modifier = Modifier.height(3.dp))
-
-                        val profitColor = if (item.profit >= 0.0) Color(0xFF1565C0) else Color(0xFFC62828)
-                        Text(
-                            text = String.format(Locale.US, "%.2f", item.profit),
-                            fontSize = 15.sp,
+                            text = "${item.symbol}, ",
+                            fontFamily = MT5RobotoCondensedFontFamily,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
-                            color = profitColor
+                            color = Color(0xFF111111),
+                            lineHeight = 19.sp,
+                            modifier = Modifier.alignByBaseline()
+                        )
+                        val typeColor = if (item.isBuy) Color(0xFF0D62C6) else Color(0xFFB71C1C)
+                        Text(
+                            text = "${if (item.isBuy) "buy" else "sell"} ${String.format(Locale.US, "%.2f", item.lots)}",
+                            fontFamily = MT5RobotoCondensedFontFamily,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = typeColor,
+                            lineHeight = 19.sp,
+                            modifier = Modifier.alignByBaseline()
                         )
                     }
+
+                    Text(
+                        text = item.closeTime,
+                        fontFamily = MT5RobotoCondensedFontFamily,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Normal,
+                        color = Color(0xFF6E7378),
+                        lineHeight = 16.sp,
+                        modifier = Modifier.alignByBaseline()
+                    )
                 }
 
-                // Expanded Detail Section matching Screenshot (858281359_1892617761734391_2008671302532340760_n.jpg)
+                Spacer(modifier = Modifier.height(1.dp))
+
+                // Line 2: Left = [30 453.85 → 30 516.23] (Roboto Condensed Bold 16.5sp) | Right = [-12.48] (Roboto Bold 14.5sp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    Text(
+                        text = "${formatMT5HistoryPrice(item.openPrice, item.digits)} \u2192 ${formatMT5HistoryPrice(item.closePrice, item.digits)}",
+                        fontFamily = MT5RobotoCondensedFontFamily,
+                        fontSize = 16.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF6E7378),
+                        lineHeight = 18.5.sp,
+                        modifier = Modifier.alignByBaseline()
+                    )
+
+                    val profitColor = if (item.profit >= 0.0) Color(0xFF0D62C6) else Color(0xFFB71C1C)
+                    Text(
+                        text = String.format(Locale.US, "%.2f", item.profit),
+                        fontFamily = MT5RobotoFontFamily,
+                        fontSize = 14.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = profitColor,
+                        lineHeight = 17.sp,
+                        modifier = Modifier.alignByBaseline()
+                    )
+                }
+
+                // Expanded Detail Section matching Screenshot
                 if (isExpanded) {
                     val detailColor = Color(0xFF70757A)
                     val detailFontSize = 13.sp
@@ -734,6 +779,7 @@ private fun MT5HistoryPositionRow(
                         Box(modifier = Modifier.weight(0.46f)) {
                             Text(
                                 text = item.ticketId,
+                                fontFamily = MT5RobotoCondensedFontFamily,
                                 fontSize = detailFontSize,
                                 fontWeight = FontWeight.Normal,
                                 color = detailColor
@@ -747,12 +793,14 @@ private fun MT5HistoryPositionRow(
                         ) {
                             Text(
                                 text = "Open:",
+                                fontFamily = MT5RobotoCondensedFontFamily,
                                 fontSize = detailFontSize,
                                 fontWeight = FontWeight.Normal,
                                 color = detailColor
                             )
                             Text(
                                 text = item.openTime,
+                                fontFamily = MT5RobotoCondensedFontFamily,
                                 fontSize = detailFontSize,
                                 fontWeight = FontWeight.Normal,
                                 color = detailColor
@@ -774,12 +822,14 @@ private fun MT5HistoryPositionRow(
                         ) {
                             Text(
                                 text = "S / L:",
+                                fontFamily = MT5RobotoCondensedFontFamily,
                                 fontSize = detailFontSize,
                                 fontWeight = FontWeight.Normal,
                                 color = detailColor
                             )
                             Text(
                                 text = slText,
+                                fontFamily = MT5RobotoCondensedFontFamily,
                                 fontSize = detailFontSize,
                                 fontWeight = FontWeight.Normal,
                                 color = detailColor
@@ -793,12 +843,14 @@ private fun MT5HistoryPositionRow(
                         ) {
                             Text(
                                 text = "Swap:",
+                                fontFamily = MT5RobotoCondensedFontFamily,
                                 fontSize = detailFontSize,
                                 fontWeight = FontWeight.Normal,
                                 color = detailColor
                             )
                             Text(
                                 text = String.format(Locale.US, "%.2f", item.swap),
+                                fontFamily = MT5RobotoCondensedFontFamily,
                                 fontSize = detailFontSize,
                                 fontWeight = FontWeight.Normal,
                                 color = detailColor
@@ -820,12 +872,14 @@ private fun MT5HistoryPositionRow(
                         ) {
                             Text(
                                 text = "T / P:",
+                                fontFamily = MT5RobotoCondensedFontFamily,
                                 fontSize = detailFontSize,
                                 fontWeight = FontWeight.Normal,
                                 color = detailColor
                             )
                             Text(
                                 text = tpText,
+                                fontFamily = MT5RobotoCondensedFontFamily,
                                 fontSize = detailFontSize,
                                 fontWeight = FontWeight.Normal,
                                 color = detailColor
@@ -839,12 +893,14 @@ private fun MT5HistoryPositionRow(
                         ) {
                             Text(
                                 text = "Commission:",
+                                fontFamily = MT5RobotoCondensedFontFamily,
                                 fontSize = detailFontSize,
                                 fontWeight = FontWeight.Normal,
                                 color = detailColor
                             )
                             Text(
                                 text = String.format(Locale.US, "%.2f", item.commission),
+                                fontFamily = MT5RobotoCondensedFontFamily,
                                 fontSize = detailFontSize,
                                 fontWeight = FontWeight.Normal,
                                 color = detailColor
