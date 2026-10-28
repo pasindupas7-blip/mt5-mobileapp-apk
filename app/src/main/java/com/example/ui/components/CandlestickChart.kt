@@ -55,6 +55,7 @@ import com.example.model.HistoryTrade
 import com.example.model.SymbolQuote
 import com.example.model.TradePosition
 import com.example.ui.theme.ChartMA
+import com.example.ui.theme.MT5RobotoCondensedFontFamily
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -588,9 +589,24 @@ fun CandlestickChart(
             } else {
                 rawRange
             }
-            // Smoothly expand vertical price padding when zooming out so the chart matches
-            // Screenshot 1 (medium zoom out) and Screenshot 4 (max zoom out)
-            val verticalZoomPaddingFactor = 0.11 + (zoomOutShiftFraction.toDouble() * 0.48)
+            // Smoothly adjust vertical price padding across zoom levels:
+            // - Zoomed In (Screenshot 1): compact padding (~0.04) so candles & trade connectors stretch tall
+            // - Medium Zoom (Screenshot 2): moderate padding (~0.18..0.22)
+            // - Max Zoom Out (Screenshot 3): expanded padding (~1.40) so candles & trade arrows compress vertically
+            val zoomInTightenFraction = if (isFit14Days) {
+                0f
+            } else if (zoomScale > 1.0f) {
+                ((zoomScale - 1.0f) / 0.65f).coerceIn(0f, 1f)
+            } else {
+                0f
+            }
+            val verticalZoomPaddingFactor = if (isFit14Days) {
+                0.22
+            } else {
+                val basePad = 0.12 - (zoomInTightenFraction.toDouble() * 0.08)
+                val outShift = zoomOutShiftFraction.toDouble()
+                basePad + (outShift * 0.24) + (outShift * outShift * 1.04)
+            }
             val rawPadding = effectiveRange * verticalZoomPaddingFactor
             val numHorizontalLines = 18
             val topGridMargin = 13.dp.toPx()
@@ -621,10 +637,13 @@ fun CandlestickChart(
 
             val gridDash = PathEffect.dashPathEffect(floatArrayOf(3.5.dp.toPx(), 3.5.dp.toPx()), 0f)
 
-            // Draw 18 horizontal dashed price grid lines and crisp right-axis price labels
-            for (row in 0 until numHorizontalLines) {
+            // Draw horizontal dashed price grid lines (including any line in the top/bottom margin)
+            // and crisp right-axis price labels
+            val rowSpacingPx = gridSpanPx / (numHorizontalLines - 1).toFloat()
+            for (row in -1..numHorizontalLines) {
                 val priceAtRow = topGridPrice - row * exactPriceStep
-                val y = topGridMargin + (gridSpanPx / (numHorizontalLines - 1).toFloat()) * row
+                val y = topGridMargin + rowSpacingPx * row
+                if (y < 2.dp.toPx() || y > chartHeight - 2.dp.toPx()) continue
 
                 drawLine(
                     color = gridColor,
@@ -634,24 +653,26 @@ fun CandlestickChart(
                     pathEffect = gridDash
                 )
 
-                val priceStr = String.format(Locale.US, "%.${quote.digits}f", priceAtRow)
-                val labelY = (y - 6.5.dp.toPx()).coerceIn(1.dp.toPx(), chartHeight - 16.dp.toPx())
-                drawText(
-                    textMeasurer = textMeasurer,
-                    text = priceStr,
-                    topLeft = Offset(chartWidth + 4.5.dp.toPx(), labelY),
-                    style = TextStyle(
-                        fontSize = 10.2.sp,
-                        color = axisTextColor,
-                        fontWeight = FontWeight.Normal
+                if (row in 0 until numHorizontalLines) {
+                    val priceStr = String.format(Locale.US, "%.${quote.digits}f", priceAtRow)
+                    val labelY = (y - 6.5.dp.toPx()).coerceIn(1.dp.toPx(), chartHeight - 16.dp.toPx())
+                    drawText(
+                        textMeasurer = textMeasurer,
+                        text = priceStr,
+                        topLeft = Offset(chartWidth + 4.5.dp.toPx(), labelY),
+                        style = TextStyle(
+                            fontSize = 10.2.sp,
+                            color = axisTextColor,
+                            fontWeight = FontWeight.Normal
+                        )
                     )
-                )
+                }
             }
 
-            // Draw candle-aligned vertical dashed time grid lines and bottom-axis timestamps
-            // (~4 vertical grid lines across chartWidth at every zoom level, projecting into the
-            // right-side future margin just like in Screenshots 1, 2, 3, and 4)
-            val targetVertSpacingPx = chartWidth / 3.85f
+            // Draw candle-aligned vertical dashed time grid lines and bottom-axis timestamps:
+            // - ~10 to 11 vertical grid lines across chartWidth at every zoom level (matching MT5 square grid)
+            // - Bottom time labels appear on every 3rd vertical grid line (k % 3 == 0), giving ~3-4 time labels
+            val targetVertSpacingPx = chartWidth / 10.35f
             val barStep = max(1, kotlin.math.round(targetVertSpacingPx / totalCandleSlot).toInt())
             val minK = floor((idxAtLeftEdge - (n - 1).toFloat()) / barStep.toFloat()).toInt() - 1
             val maxK = ceil((idxAtRightEdge - (n - 1).toFloat()) / barStep.toFloat()).toInt() + 1
@@ -671,32 +692,34 @@ fun CandlestickChart(
                     pathEffect = gridDash
                 )
 
-                val tsAtGrid = when {
-                    gridCandleIdx in 0 until n -> displayCandles[gridCandleIdx].timestamp
-                    gridCandleIdx >= n && lastCandleTs > 0L -> lastCandleTs + (gridCandleIdx - (n - 1)).toLong() * tfIntervalMs
-                    gridCandleIdx < 0 && firstCandleTs > 0L -> firstCandleTs - (0 - gridCandleIdx).toLong() * tfIntervalMs
-                    else -> lastCandleTs
-                }
-                val timeLabel = if (tsAtGrid > 0L) {
-                    axisDateFormat.format(Date(tsAtGrid))
-                } else {
-                    displayCandles.last().time
-                }
-                val textLayout = textMeasurer.measure(
-                    text = timeLabel,
-                    style = TextStyle(
-                        fontSize = 10.sp,
-                        color = axisTextColor,
-                        fontWeight = FontWeight.Normal
-                    )
-                )
-                val centeredLeft = x - textLayout.size.width / 2f
-                if (centeredLeft + textLayout.size.width > 4.dp.toPx() && centeredLeft < chartWidth - 4.dp.toPx()) {
-                    clipRect(left = 0f, top = chartHeight, right = chartWidth, bottom = size.height) {
-                        drawText(
-                            textLayoutResult = textLayout,
-                            topLeft = Offset(centeredLeft, chartHeight + 4.dp.toPx())
+                if (k % 3 == 0) {
+                    val tsAtGrid = when {
+                        gridCandleIdx in 0 until n -> displayCandles[gridCandleIdx].timestamp
+                        gridCandleIdx >= n && lastCandleTs > 0L -> lastCandleTs + (gridCandleIdx - (n - 1)).toLong() * tfIntervalMs
+                        gridCandleIdx < 0 && firstCandleTs > 0L -> firstCandleTs - (0 - gridCandleIdx).toLong() * tfIntervalMs
+                        else -> lastCandleTs
+                    }
+                    val timeLabel = if (tsAtGrid > 0L) {
+                        axisDateFormat.format(Date(tsAtGrid))
+                    } else {
+                        displayCandles.last().time
+                    }
+                    val textLayout = textMeasurer.measure(
+                        text = timeLabel,
+                        style = TextStyle(
+                            fontSize = 10.sp,
+                            color = axisTextColor,
+                            fontWeight = FontWeight.Normal
                         )
+                    )
+                    val centeredLeft = x - textLayout.size.width / 2f
+                    if (centeredLeft + textLayout.size.width > 4.dp.toPx() && centeredLeft < chartWidth - 4.dp.toPx()) {
+                        clipRect(left = 0f, top = chartHeight, right = chartWidth, bottom = size.height) {
+                            drawText(
+                                textLayoutResult = textLayout,
+                                topLeft = Offset(centeredLeft, chartHeight + 4.dp.toPx())
+                            )
+                        }
                     }
                 }
             }
@@ -705,6 +728,99 @@ fun CandlestickChart(
             metrics.hoveredCandleIndex = -1
 
             clipRect(left = 0f, top = 0f, right = chartWidth, bottom = chartHeight) {
+                // Draw Open Trade Dashed Lines & Inline Labels BEFORE candlesticks so candlesticks render on top of the text & lines
+                // (matching 866760067 & 867873558 where labels sit strictly on their own openY line and only overlap when the lines themselves overlap)
+                val openTradeDashEffect = PathEffect.dashPathEffect(
+                    floatArrayOf(3.5.dp.toPx(), 2.5.dp.toPx()),
+                    0f
+                )
+                activeSymbolPositions.forEach { pos ->
+                    pos.sl?.let { slPrice ->
+                        if (slPrice > 0.0) {
+                            val slY = priceToY(slPrice)
+                            if (slY in 0f..chartHeight) {
+                                drawLine(
+                                    color = Color(0xFFD32F2F),
+                                    start = Offset(0f, slY),
+                                    end = Offset(chartWidth, slY),
+                                    strokeWidth = 1.1.dp.toPx(),
+                                    pathEffect = openTradeDashEffect
+                                )
+                            }
+                        }
+                    }
+
+                    pos.tp?.let { tpPrice ->
+                        if (tpPrice > 0.0) {
+                            val tpY = priceToY(tpPrice)
+                            if (tpY in 0f..chartHeight) {
+                                drawLine(
+                                    color = Color(0xFF26A69A),
+                                    start = Offset(0f, tpY),
+                                    end = Offset(chartWidth, tpY),
+                                    strokeWidth = 1.1.dp.toPx(),
+                                    pathEffect = openTradeDashEffect
+                                )
+                            }
+                        }
+                    }
+
+                    val openY = priceToY(pos.openPrice)
+                    if (openY in -20.dp.toPx()..(chartHeight + 20.dp.toPx())) {
+                        val tradeDashLineColor = if (!pos.isBuy || pos.profit < 0.0) {
+                            Color(0xFFA94438)
+                        } else {
+                            Color(0xFF0D62C6)
+                        }
+                        val sideTextColor = if (pos.isBuy) Color(0xFF0D62C6) else Color(0xFFB71C1C)
+                        val pnlTextColor = if (pos.profit >= 0.0) Color(0xFF0D62C6) else Color(0xFFB71C1C)
+
+                        drawLine(
+                            color = tradeDashLineColor,
+                            start = Offset(0f, openY),
+                            end = Offset(chartWidth, openY),
+                            strokeWidth = 1.1.dp.toPx(),
+                            pathEffect = openTradeDashEffect
+                        )
+
+                        val typeStr = if (pos.isBuy) "BUY" else "SELL"
+                        val lotsStr = String.format(Locale.US, "%.2f", pos.lots)
+                        val pnlSign = if (pos.profit >= 0.0) "+" else ""
+                        val pnlStr = "$pnlSign${String.format(Locale.US, "%.2f", pos.profit)} USD"
+
+                        val annotatedTradeLabel = buildAnnotatedString {
+                            withStyle(
+                                SpanStyle(
+                                    color = sideTextColor,
+                                    fontFamily = MT5RobotoCondensedFontFamily,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            ) {
+                                append("$typeStr $lotsStr, ")
+                            }
+                            withStyle(
+                                SpanStyle(
+                                    color = pnlTextColor,
+                                    fontFamily = MT5RobotoCondensedFontFamily,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            ) {
+                                append(pnlStr)
+                            }
+                        }
+
+                        val measuredLabel = textMeasurer.measure(text = annotatedTradeLabel)
+                        val labelY = openY - measuredLabel.size.height - 1.dp.toPx()
+
+                        drawText(
+                            textLayoutResult = measuredLabel,
+                            topLeft = Offset(8.dp.toPx(), labelY)
+                        )
+                    }
+                }
+
                 for (globalIdx in leftIndex..rightIndex) {
                     val candle = displayCandles[globalIdx]
                     val x = candleOriginX - ((n - 1 - globalIdx) * totalCandleSlot) + clampedPan
@@ -786,17 +902,23 @@ fun CandlestickChart(
                 }
 
                 // =========================================================================
-                // MT5 Trade History Markers on Chart (matching Screenshot 863219104):
+                // MT5 Trade History Markers on Chart (matching Zoom-In / Med-Zoom / Zoom-Out Screenshots):
                 // - Red Down-Pointing Block Arrow for SELL deals (opening a SELL or closing a BUY)
                 // - Blue Up-Pointing Block Arrow for BUY deals (opening a BUY or closing a SELL)
                 // - Dashed connector line between (openX, openY) and (closeX, closeY)
+                // - Arrow size & dash pattern scale dynamically with zoom level (totalCandleSlot):
+                //   * Zoomed In (totalCandleSlot >= 15.5dp): 12.5dp wide × 11.8dp tall
+                //   * Medium / Zoomed Out (totalCandleSlot <= 8.0dp): 8.0dp wide × 7.1dp tall
                 // =========================================================================
-                fun drawMt5DealArrow(tipX: Float, tipY: Float, isUpArrow: Boolean) {
-                    val headHalfW = 10.5.dp.toPx()
-                    val headH = 11.dp.toPx()
-                    val shaftHalfW = 4.5.dp.toPx()
-                    val totalH = 19.dp.toPx()
+                val arrowScale = ((totalCandleSlot - 8.0.dp.toPx()) / (7.5.dp.toPx())).coerceIn(0f, 1f)
+                val headHalfW = 4.0.dp.toPx() + (2.25.dp.toPx() * arrowScale)
+                val headH = 4.6.dp.toPx() + (3.2.dp.toPx() * arrowScale)
+                val shaftHalfW = 2.4.dp.toPx() + (0.95.dp.toPx() * arrowScale)
+                val totalH = 7.1.dp.toPx() + (4.7.dp.toPx() * arrowScale)
+                val haloStrokeW = 1.1.dp.toPx() + (0.45.dp.toPx() * arrowScale)
+                val innerBorderW = 0.5.dp.toPx() + (0.15.dp.toPx() * arrowScale)
 
+                fun drawMt5DealArrow(tipX: Float, tipY: Float, isUpArrow: Boolean) {
                     val arrowPath = Path().apply {
                         if (isUpArrow) {
                             // Blue Up-Pointing Arrow: tip at (tipX, tipY), body extends downward
@@ -821,14 +943,14 @@ fun CandlestickChart(
                         }
                     }
 
-                    val fillColor = if (isUpArrow) Color(0xFF2979FF) else Color(0xFFEA4C46)
-                    val borderColor = if (isUpArrow) Color(0xFF1565C0) else Color(0xFFC62828)
+                    val fillColor = if (isUpArrow) Color(0xFF2F88EC) else Color(0xFFE84E4C)
+                    val borderColor = if (isUpArrow) Color(0xFF1F6BC4) else Color(0xFFC03937)
 
                     // White outer halo so the arrow stands out cleanly over red/green candle bodies
                     drawPath(
                         path = arrowPath,
                         color = Color.White,
-                        style = Stroke(width = 1.6.dp.toPx())
+                        style = Stroke(width = haloStrokeW)
                     )
                     // Solid vibrant fill
                     drawPath(
@@ -839,16 +961,58 @@ fun CandlestickChart(
                     drawPath(
                         path = arrowPath,
                         color = borderColor,
-                        style = Stroke(width = 0.7.dp.toPx())
+                        style = Stroke(width = innerBorderW)
                     )
                 }
 
+                val dashLen = 2.0.dp.toPx() + (1.2.dp.toPx() * arrowScale)
+                val gapLen = 1.6.dp.toPx() + (0.8.dp.toPx() * arrowScale)
+                val connectorStrokeW = 0.8.dp.toPx() + (0.25.dp.toPx() * arrowScale)
                 val tradeConnectorDash = PathEffect.dashPathEffect(
-                    floatArrayOf(4.5.dp.toPx(), 3.5.dp.toPx()),
+                    floatArrayOf(dashLen, gapLen),
                     0f
                 )
 
-                // 1. Draw closed HistoryTrade arrows and dashed connector lines
+                // Pass 1: Draw all dashed connector lines first so arrows always render cleanly on top
+                resolvedHistoryMarkers.forEach { marker ->
+                    val openIdx = marker.openCandleIdx
+                    val closeIdx = marker.closeCandleIdx
+                    val openX = candleOriginX - ((n - 1 - openIdx) * totalCandleSlot) + clampedPan
+                    val closeX = candleOriginX - ((n - 1 - closeIdx) * totalCandleSlot) + clampedPan
+
+                    val minX = min(openX, closeX)
+                    val maxX = max(openX, closeX)
+                    if (maxX < -40.dp.toPx() || minX > chartWidth + 40.dp.toPx()) return@forEach
+
+                    val openY = priceToY(marker.trade.openPrice)
+                    val closeY = priceToY(marker.trade.closePrice)
+                    val dx = closeX - openX
+                    val dy = closeY - openY
+                    val distPx = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+
+                    if (distPx >= 1.5.dp.toPx()) {
+                        drawLine(
+                            color = Color(0xFF5A7D95),
+                            start = Offset(openX, openY),
+                            end = Offset(closeX, closeY),
+                            strokeWidth = connectorStrokeW,
+                            pathEffect = tradeConnectorDash
+                        )
+                    }
+                }
+
+                // Pass 2: Draw Entry & Exit deal arrows on top of the dashed lines
+                val drawnArrowSpots = mutableListOf<Triple<Float, Float, Boolean>>()
+                fun drawDealArrowDeduplicated(tipX: Float, tipY: Float, isUpArrow: Boolean) {
+                    val duplicate = drawnArrowSpots.any { (x, y, up) ->
+                        up == isUpArrow && abs(x - tipX) < 0.6.dp.toPx() && abs(y - tipY) < 0.6.dp.toPx()
+                    }
+                    if (!duplicate) {
+                        drawnArrowSpots.add(Triple(tipX, tipY, isUpArrow))
+                        drawMt5DealArrow(tipX = tipX, tipY = tipY, isUpArrow = isUpArrow)
+                    }
+                }
+
                 resolvedHistoryMarkers.forEach { marker ->
                     val openIdx = marker.openCandleIdx
                     val closeIdx = marker.closeCandleIdx
@@ -862,17 +1026,8 @@ fun CandlestickChart(
                     val openY = priceToY(marker.trade.openPrice)
                     val closeY = priceToY(marker.trade.closePrice)
 
-                    // Diagonal dashed connector line between entry and exit
-                    drawLine(
-                        color = Color(0xFF7A7370),
-                        start = Offset(openX, openY),
-                        end = Offset(closeX, closeY),
-                        strokeWidth = 1.1.dp.toPx(),
-                        pathEffect = tradeConnectorDash
-                    )
-
                     // Entry deal arrow: BUY trade opens with Blue Up Arrow; SELL trade opens with Red Down Arrow
-                    drawMt5DealArrow(
+                    drawDealArrowDeduplicated(
                         tipX = openX,
                         tipY = openY,
                         isUpArrow = marker.trade.isBuy
@@ -880,11 +1035,28 @@ fun CandlestickChart(
 
                     // Exit deal arrow: closing a BUY trade is a SELL deal (Red Down Arrow);
                     // closing a SELL trade is a BUY deal (Blue Up Arrow)
-                    drawMt5DealArrow(
+                    drawDealArrowDeduplicated(
                         tipX = closeX,
                         tipY = closeY,
                         isUpArrow = !marker.trade.isBuy
                     )
+                }
+
+                // Also draw the entry deal arrow for each currently open position on its entry candle
+                activeSymbolPositions.forEach { pos ->
+                    val openMs = com.example.data.SriLankaMarketHours.parseMt5DateTimeMillis(pos.openTime)
+                    val openIdx = findCandleIndexForTimestamp(displayCandles, openMs, tfIntervalMs)
+                    if (openIdx in 0 until n) {
+                        val openX = candleOriginX - ((n - 1 - openIdx) * totalCandleSlot) + clampedPan
+                        if (openX >= -40.dp.toPx() && openX <= chartWidth + 40.dp.toPx()) {
+                            val openY = priceToY(pos.openPrice)
+                            drawDealArrowDeduplicated(
+                                tipX = openX,
+                                tipY = openY,
+                                isUpArrow = pos.isBuy
+                            )
+                        }
+                    }
                 }
             }
 
@@ -902,20 +1074,15 @@ fun CandlestickChart(
                 strokeWidth = 0.8.dp.toPx()
             )
 
-            // Draw Open Trade Lines (Entry Price, Stop Loss, Take Profit) matching Screenshot 3
-            activeSymbolPositions.forEachIndexed { index, pos ->
+            // Draw Right-Axis Price Tags for Open Positions (SL, TP, and Outlined Open Price Box)
+            // Drawn BEFORE the live Red Ask / Green Bid badges so the Green Bid badge covers the open price box
+            // when at the same price (866760067) and reveals it when price moves away (867873558)
+            activeSymbolPositions.forEach { pos ->
                 pos.sl?.let { slPrice ->
                     if (slPrice > 0.0) {
                         val slY = priceToY(slPrice)
                         if (slY in 0f..chartHeight) {
                             val slColor = Color(0xFFD32F2F)
-                            drawLine(
-                                color = slColor,
-                                start = Offset(0f, slY),
-                                end = Offset(chartWidth, slY),
-                                strokeWidth = 1.2.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx()), 0f)
-                            )
                             val slStr = String.format(Locale.US, "%.${quote.digits}f", slPrice)
                             drawRect(
                                 color = slColor,
@@ -941,13 +1108,6 @@ fun CandlestickChart(
                         val tpY = priceToY(tpPrice)
                         if (tpY in 0f..chartHeight) {
                             val tpColor = Color(0xFF26A69A)
-                            drawLine(
-                                color = tpColor,
-                                start = Offset(0f, tpY),
-                                end = Offset(chartWidth, tpY),
-                                strokeWidth = 1.2.dp.toPx(),
-                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx()), 0f)
-                            )
                             val tpStr = String.format(Locale.US, "%.${quote.digits}f", tpPrice)
                             drawRect(
                                 color = tpColor,
@@ -968,54 +1128,39 @@ fun CandlestickChart(
                     }
                 }
 
-                // Open Position Dashed Line & Two-Color Inline Label ("SELL 0.01, +0.43 USD") matching Screenshot 3
-                val rawOpenY = priceToY(pos.openPrice)
-                val openY = rawOpenY.coerceIn(16.dp.toPx(), chartHeight - 10.dp.toPx())
-                val tradeDashLineColor = Color(0xFF5F6368)
-                val sideTextColor = if (pos.isBuy) Color(0xFF0A60C2) else Color(0xFFC62828)
-                val pnlTextColor = if (pos.profit >= 0.0) Color(0xFF0A60C2) else Color(0xFFC62828)
-
-                drawLine(
-                    color = tradeDashLineColor,
-                    start = Offset(0f, openY),
-                    end = Offset(chartWidth, openY),
-                    strokeWidth = 1.2.dp.toPx(),
-                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx()), 0f)
-                )
-
-                val typeStr = if (pos.isBuy) "BUY" else "SELL"
-                val lotsStr = String.format(Locale.US, "%.2f", pos.lots)
-                val pnlSign = if (pos.profit >= 0.0) "+" else ""
-                val pnlStr = "$pnlSign${String.format(Locale.US, "%.2f", pos.profit)} USD"
-                val stackOffsetY = (index % 3) * 14.dp.toPx()
-                val labelY = (openY - 15.dp.toPx() - stackOffsetY).coerceIn(2.dp.toPx(), chartHeight - 16.dp.toPx())
-
-                val annotatedTradeLabel = buildAnnotatedString {
-                    withStyle(
-                        SpanStyle(
-                            color = sideTextColor,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    ) {
-                        append("$typeStr $lotsStr, ")
+                val openY = priceToY(pos.openPrice)
+                if (openY in 0f..chartHeight) {
+                    val tagBorderColor = if (!pos.isBuy || pos.profit < 0.0) {
+                        Color(0xFFA94438)
+                    } else {
+                        Color(0xFF0D62C6)
                     }
-                    withStyle(
-                        SpanStyle(
-                            color = pnlTextColor,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
+                    val tagHeight = 16.dp.toPx()
+                    val tagTop = (openY - tagHeight / 2f).coerceIn(0f, chartHeight - tagHeight)
+                    val openPriceStr = String.format(Locale.US, "%.${quote.digits}f", pos.openPrice)
+
+                    drawRect(
+                        color = Color.White,
+                        topLeft = Offset(chartWidth + 0.5.dp.toPx(), tagTop),
+                        size = Size(rightAxisWidth - 1.dp.toPx(), tagHeight)
+                    )
+                    drawRect(
+                        color = tagBorderColor,
+                        topLeft = Offset(chartWidth + 0.5.dp.toPx(), tagTop),
+                        size = Size(rightAxisWidth - 1.dp.toPx(), tagHeight),
+                        style = Stroke(width = 1.dp.toPx())
+                    )
+                    drawText(
+                        textMeasurer = textMeasurer,
+                        text = openPriceStr,
+                        topLeft = Offset(chartWidth + 4.dp.toPx(), tagTop + 1.dp.toPx()),
+                        style = TextStyle(
+                            fontSize = 10.sp,
+                            color = tagBorderColor,
+                            fontWeight = FontWeight.Medium
                         )
-                    ) {
-                        append(pnlStr)
-                    }
+                    )
                 }
-
-                drawText(
-                    textMeasurer = textMeasurer,
-                    text = annotatedTradeLabel,
-                    topLeft = Offset(5.dp.toPx(), labelY)
-                )
             }
 
             // Current Ask Line (Red #EF5350) & Bid Line (Teal #26A69A) with Right-Axis Badges (matching Screenshot 863219104)
