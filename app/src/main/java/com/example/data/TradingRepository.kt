@@ -2424,8 +2424,11 @@ class TradingRepository(private val scope: CoroutineScope) {
         )
 
         _positions.update { currentList ->
-            val withoutOld = currentList.filter { it.id != targetId }
-            listOf(runningPos) + withoutOld
+            if (currentList.any { it.id == targetId }) {
+                currentList.map { if (it.id == targetId) runningPos else it }
+            } else {
+                listOf(runningPos) + currentList
+            }
         }
 
         recalculatePositionsAndAccount(_quotes.value)

@@ -400,6 +400,18 @@ fun ChartScreen(
                             hitOutcome = null
                         )
                     },
+                    onSaveRunningPositionEdit = { position, isBuy, openPrice, openTime ->
+                        viewModel.saveOrUpdateRunningPosition(
+                            existingId = position.id,
+                            symbol = position.symbol,
+                            isBuy = isBuy,
+                            lots = position.lots,
+                            openPrice = openPrice,
+                            openTime = openTime,
+                            sl = position.sl,
+                            tp = position.tp
+                        )
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
 
