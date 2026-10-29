@@ -116,7 +116,7 @@ class FastForexService private constructor(
     private val activeSymbol = MutableStateFlow("XAUUSD")
     val currentActiveSymbol: StateFlow<String> = activeSymbol.asStateFlow()
 
-    private val activeTimeframe = MutableStateFlow(Timeframe.M1)
+    private val activeTimeframe = MutableStateFlow(Timeframe.M5)
 
     // Thread-safe caches for real-world server anchor prices and live sub-second tick evolution
     private val lastKnownPrices = ConcurrentHashMap<String, Double>()
@@ -140,7 +140,7 @@ class FastForexService private constructor(
     )
 
     init {
-        val clampedNow = SriLankaMarketHours.clampToLastOpenMarketTimestamp(System.currentTimeMillis())
+        val clampedNow = SriLankaMarketHours.clampToLastOpenMarketTimestamp(SriLankaMarketHours.chartNowMillis())
         val currentM1Bucket = (clampedNow / 60_000L) * 60_000L
         val allStartupSymbols = listOf(
             "INRUSD", "EURUSD", "GBPUSD", "USDCHF", "USDJPY", "USDCAD",
@@ -398,7 +398,7 @@ class FastForexService private constructor(
                                     price = liveBid,
                                     bid = liveBid,
                                     ask = liveBid + spread,
-                                    timestamp = System.currentTimeMillis()
+                                    timestamp = SriLankaMarketHours.chartNowMillis()
                                 )
                                 _ticks.emit(tick)
                                 return tick
@@ -617,7 +617,7 @@ class FastForexService private constructor(
             price = price,
             bid = bid,
             ask = ask,
-            timestamp = System.currentTimeMillis()
+            timestamp = SriLankaMarketHours.chartNowMillis()
         )
     }
 
@@ -853,7 +853,7 @@ class FastForexService private constructor(
         if (from == "XAU" || from == "BTC") return emptyList()
 
         return try {
-            val nowMs = System.currentTimeMillis()
+            val nowMs = SriLankaMarketHours.chartNowMillis()
             val startMs = nowMs - (HISTORY_DAYS * 86_400_000L)
             val (startStr, endStr) = synchronized(dateFormatLock) {
                 val utcFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US).apply {
@@ -1184,21 +1184,42 @@ class FastForexService private constructor(
         symbol: String,
         timeframe: Timeframe
     ): List<Candle> {
-        val sortedRaw = rawCandles
+        val sortedRawUnshifted = rawCandles
             .filter { SriLankaMarketHours.isMarketOpen(it.timestamp) }
             .sortedBy { it.timestamp }
-        if (sortedRaw.isEmpty()) return emptyList()
+        if (sortedRawUnshifted.isEmpty()) return emptyList()
 
         val normSym = normalizeSymbol(symbol)
         val minPoint = getMinPoint(normSym)
         val unitRange = getNaturalM1Range(normSym) * getTimeframeTickScale(timeframe)
         val intervalMs = (timeframe.minutes * 60_000L).coerceAtLeast(60_000L)
-        val now = System.currentTimeMillis()
+        val now = SriLankaMarketHours.chartNowMillis()
         val clampedOpenNow = SriLankaMarketHours.clampToLastOpenMarketTimestamp(now)
         var currentBucket = (clampedOpenNow / intervalMs) * intervalMs
         while (!SriLankaMarketHours.isMarketOpen(currentBucket)) {
             currentBucket = SriLankaMarketHours.stepBackwardOpenMarketBucket(currentBucket, intervalMs)
         }
+
+        // If the upstream feed is running on wall-clock time (ahead of chartNowMillis by ~10m),
+        // shift its raw timestamps back by CHART_TIME_OFFSET_MS so chart time is 10 minutes earlier.
+        // Feeds that already have a ~10m exchange delay (like GC=F / XAUUSD) are already at chartNowMillis.
+        val rawLastTs = sortedRawUnshifted.last().timestamp
+        val preBucketShiftMs = if (timeframe.minutes < Timeframe.D1.minutes && rawLastTs > clampedOpenNow + 90_000L) {
+            -SriLankaMarketHours.CHART_TIME_OFFSET_MS
+        } else {
+            0L
+        }
+        val sortedRaw = if (preBucketShiftMs != 0L) {
+            sortedRawUnshifted.mapNotNull { c ->
+                val shiftedTs = c.timestamp + preBucketShiftMs
+                if (SriLankaMarketHours.isMarketOpen(shiftedTs)) {
+                    c.copy(timestamp = shiftedTs)
+                } else null
+            }
+        } else {
+            sortedRawUnshifted
+        }
+        if (sortedRaw.isEmpty()) return emptyList()
 
         // 1. Merge raw candles that fall into the same timeframe bucket (e.g. Yahoo's :00s bar + :31s live tick)
         val mergedByBucket = LinkedHashMap<Long, Candle>(sortedRaw.size)
@@ -1226,15 +1247,14 @@ class FastForexService private constructor(
         val bucketedList = mergedByBucket.values.toList()
         if (bucketedList.isEmpty()) return emptyList()
 
-        // 2. If the exchange feed has a fixed delay (e.g. 10m COMEX delay on GC=F / XAUUSD M1),
-        // align the real candle timestamps up to currentBucket so real market candles appear right up to now
+        // 2. Align to currentBucket (now - 10m) only if the feed lags behind chartNowMillis
         val lastRawBucket = bucketedList.last().timestamp
         val delayBuckets = if (currentBucket > lastRawBucket) {
             (currentBucket - lastRawBucket) / intervalMs
         } else {
             0L
         }
-        val delayShiftMs = if (timeframe.minutes < Timeframe.D1.minutes && delayBuckets in 1L..25L) {
+        val delayShiftMs = if (timeframe.minutes < Timeframe.D1.minutes && delayBuckets in 1L..15L) {
             currentBucket - lastRawBucket
         } else {
             0L
@@ -1346,7 +1366,7 @@ class FastForexService private constructor(
         ffDailySeries: List<Pair<Long, Double>> = emptyList()
     ): List<Candle> {
         val normSym = normalizeSymbol(symbol)
-        val now = System.currentTimeMillis()
+        val now = SriLankaMarketHours.chartNowMillis()
         val tfIntervalMs = (timeframe.minutes * 60_000L).coerceAtLeast(60_000L)
         val canonicalAnchor = getCanonicalBasePrice(normSym)
 

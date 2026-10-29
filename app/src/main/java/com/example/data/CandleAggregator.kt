@@ -32,9 +32,14 @@ class CandleAggregator(
         val prevBucket = currentBucketStart
 
         candles.clear()
+        val clampedNow = SriLankaMarketHours.clampToLastOpenMarketTimestamp(SriLankaMarketHours.chartNowMillis())
+        val maxAllowedBucket = (clampedNow / intervalMillis) * intervalMillis
+
         // Strictly keep only candles that fall inside Monday 03:30 .. Saturday 02:29 Sri Lanka Time
+        // and do not exceed the TradingView-aligned chart clock (now - 10 minutes)
         val validOpenMarketCandles = initialCandles.filter { candle ->
-            candle.timestamp <= 0L || SriLankaMarketHours.isMarketOpen(candle.timestamp)
+            candle.timestamp <= 0L ||
+                (SriLankaMarketHours.isMarketOpen(candle.timestamp) && candle.timestamp <= maxAllowedBucket)
         }
         candles.addAll(validOpenMarketCandles.takeLast(maxCandles))
         if (candles.isNotEmpty()) {
@@ -42,8 +47,7 @@ class CandleAggregator(
             currentBucketStart = if (lastTs > 0L) {
                 (lastTs / intervalMillis) * intervalMillis
             } else {
-                val clampedNow = SriLankaMarketHours.clampToLastOpenMarketTimestamp(System.currentTimeMillis())
-                (clampedNow / intervalMillis) * intervalMillis
+                maxAllowedBucket
             }
 
             // Preserve accumulated live high/low/close on the active candle only if re-seeded from the same open price
@@ -68,7 +72,7 @@ class CandleAggregator(
     @Synchronized
     fun onTick(
         price: Double,
-        timestamp: Long = System.currentTimeMillis(),
+        timestamp: Long = SriLankaMarketHours.chartNowMillis(),
         maxCandleExcursion: Double = Double.MAX_VALUE
     ): Double {
         // Do NOT create or mutate candlesticks outside Monday 03:30 AM .. Saturday 02:29 AM Sri Lanka Time

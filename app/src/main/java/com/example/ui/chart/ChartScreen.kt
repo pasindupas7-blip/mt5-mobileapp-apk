@@ -63,7 +63,6 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 private val PreferredChartSymbolOrder = listOf(
-    "INRUSD",
     "EURUSD",
     "GBPUSD",
     "USDCHF",
@@ -92,6 +91,9 @@ fun ChartScreen(
     val showMA by viewModel.showMA.collectAsState()
     val showCrosshair by viewModel.showCrosshair.collectAsState()
     val quotes by viewModel.quotes.collectAsState()
+    val showQuickTradeBar by viewModel.showQuickTradeBar.collectAsState()
+    val fit14DaysMode by viewModel.fit14DaysMode.collectAsState()
+    val chartHistoryMoveEnabled by viewModel.chartHistoryMoveEnabled.collectAsState()
 
     val symbolPositions = remember(positions, selectedQuote?.symbol) {
         positions.filter { it.symbol.equals(selectedQuote?.symbol, ignoreCase = true) }
@@ -103,8 +105,6 @@ fun ChartScreen(
     var showTfBar by remember { mutableStateOf(false) }
     var showSymbolDropdown by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
-    var showQuickTradeBar by remember { mutableStateOf(true) }
-    var fit14DaysMode by remember { mutableStateOf(false) }
 
     // Order symbols so the top 10 match Screenshot 2 (INRUSD..AUDCAD) followed by NDX100, XAUUSD, BTCUSD, etc.
     val orderedChartSymbols = remember(quotes) {
@@ -310,7 +310,7 @@ fun ChartScreen(
                                 indication = null
                             ) {
                                 showSymbolDropdown = false
-                                showQuickTradeBar = !showQuickTradeBar
+                                viewModel.toggleQuickTradeBar()
                             }
                             .testTag("one_click_trade_toggle"),
                         contentAlignment = Alignment.Center
@@ -341,6 +341,9 @@ fun ChartScreen(
         // Main Candlestick Chart Area (White background)
         Box(modifier = Modifier.weight(1f)) {
             selectedQuote?.let { q ->
+                val savedViewportState = remember(q.symbol, selectedTimeframe.label) {
+                    viewModel.getChartViewportState(q.symbol, selectedTimeframe.label)
+                }
                 CandlestickChart(
                     quote = q,
                     candles = candles,
@@ -352,7 +355,12 @@ fun ChartScreen(
                     maPeriod = 20,
                     showCrosshair = showCrosshair,
                     fit14DaysMode = fit14DaysMode,
-                    onFit14DaysChange = { fit14DaysMode = it },
+                    onFit14DaysChange = { viewModel.setFit14DaysMode(it) },
+                    enableHistoryTradeMove = chartHistoryMoveEnabled,
+                    initialViewportState = savedViewportState,
+                    onViewportStateChange = { updatedState ->
+                        viewModel.updateChartViewportState(q.symbol, selectedTimeframe.label, updatedState)
+                    },
                     onSymbolClick = {
                         showTfBar = false
                         showSymbolDropdown = !showSymbolDropdown
@@ -365,6 +373,32 @@ fun ChartScreen(
                     onCanvasTouch = {
                         if (showTfBar) showTfBar = false
                         if (showSymbolDropdown) showSymbolDropdown = false
+                    },
+                    onCalculateHistoryProfit = { isBuy, lots, openPrice, closePrice ->
+                        viewModel.calculateHistoricalTradeProfit(
+                            symbol = q.symbol,
+                            isBuy = isBuy,
+                            lots = lots,
+                            openPrice = openPrice,
+                            closePrice = closePrice
+                        )
+                    },
+                    onSaveHistoryTradeEdit = { trade, isBuy, openPrice, closePrice, openTime, closeTime ->
+                        viewModel.saveOrUpdateHistoryTrade(
+                            existingId = trade.id,
+                            symbol = trade.symbol,
+                            isBuy = isBuy,
+                            lots = trade.lots,
+                            openPrice = openPrice,
+                            closePrice = closePrice,
+                            openTime = openTime,
+                            closeTime = closeTime,
+                            sl = trade.sl,
+                            tp = trade.tp,
+                            customProfit = null,
+                            customTicketId = trade.ticketId,
+                            hitOutcome = null
+                        )
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -444,7 +478,7 @@ fun ChartScreen(
                                 Text(if (showQuickTradeBar) "Hide Buy / Sell Bar" else "Show Buy / Sell Bar")
                             },
                             onClick = {
-                                showQuickTradeBar = !showQuickTradeBar
+                                viewModel.toggleQuickTradeBar()
                                 showMoreMenu = false
                             }
                         )

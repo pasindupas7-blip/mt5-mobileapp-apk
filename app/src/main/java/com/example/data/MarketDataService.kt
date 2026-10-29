@@ -333,9 +333,15 @@ class MarketDataService private constructor(
                     val bid = if (json.has("bid")) json.optDouble("bid") else price * 0.99998
                     val ask = if (json.has("ask")) json.optDouble("ask") else price * 1.00002
 
-                    val rawTimestamp = json.optLong("timestamp", System.currentTimeMillis() / 1000)
-                    // If timestamp is in seconds, convert to milliseconds
-                    val timestampMs = if (rawTimestamp < 10000000000L) rawTimestamp * 1000L else rawTimestamp
+                    val rawTimestamp = json.optLong("timestamp", SriLankaMarketHours.chartNowMillis() / 1000)
+                    // If timestamp is in seconds, convert to milliseconds and align to chartNowMillis()
+                    val parsedMs = if (rawTimestamp < 10000000000L) rawTimestamp * 1000L else rawTimestamp
+                    val chartNow = SriLankaMarketHours.chartNowMillis()
+                    val timestampMs = if (parsedMs > chartNow + 60_000L) {
+                        parsedMs - SriLankaMarketHours.CHART_TIME_OFFSET_MS
+                    } else {
+                        parsedMs
+                    }
 
                     val tick = PriceTick(
                         symbol = normalized,
@@ -402,7 +408,7 @@ class MarketDataService private constructor(
                             price = currentPrice,
                             bid = bid,
                             ask = ask,
-                            timestamp = System.currentTimeMillis()
+                            timestamp = SriLankaMarketHours.chartNowMillis()
                         )
                         _ticks.emit(tick)
                     }

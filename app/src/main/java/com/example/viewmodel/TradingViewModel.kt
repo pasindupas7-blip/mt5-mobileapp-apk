@@ -33,6 +33,13 @@ sealed class ActiveDialog {
     data class TopUp(val currentBalance: Double) : ActiveDialog()
 }
 
+data class ChartViewportState(
+    val panOffsetPx: Float = 0f,
+    val zoomScale: Float = 1.0f,
+    val priceAxisZoom: Float = 1.0f,
+    val verticalPanPriceOffset: Double = 0.0
+)
+
 class TradingViewModel @JvmOverloads constructor(
     repositoryParam: TradingRepository? = null
 ) : ViewModel() {
@@ -49,6 +56,7 @@ class TradingViewModel @JvmOverloads constructor(
     val fastForexError: StateFlow<String?> = repository.fastForexService.lastErrorMessage
     val isCloudSynced: StateFlow<Boolean> = repository.isCloudSynced
     val currentUserEmail: StateFlow<String?> = repository.currentUserEmail
+    val chartHistoryMoveEnabled: StateFlow<Boolean> = repository.chartHistoryMoveEnabled
 
     private val _currentTab = MutableStateFlow(MT5Tab.QUOTES)
     val currentTab: StateFlow<MT5Tab> = _currentTab.asStateFlow()
@@ -56,14 +64,22 @@ class TradingViewModel @JvmOverloads constructor(
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    private val _selectedSymbol = MutableStateFlow("EURUSD")
+    private val _selectedSymbol = MutableStateFlow("XAUUSD")
     val selectedSymbol: StateFlow<String> = _selectedSymbol.asStateFlow()
 
-    private val _selectedTimeframe = MutableStateFlow(Timeframe.M15)
+    private val _selectedTimeframe = MutableStateFlow(Timeframe.M5)
     val selectedTimeframe: StateFlow<Timeframe> = _selectedTimeframe.asStateFlow()
 
     private val _quickTradeLot = MutableStateFlow(0.01)
     val quickTradeLot: StateFlow<Double> = _quickTradeLot.asStateFlow()
+
+    private val _showQuickTradeBar = MutableStateFlow(true)
+    val showQuickTradeBar: StateFlow<Boolean> = _showQuickTradeBar.asStateFlow()
+
+    private val _fit14DaysMode = MutableStateFlow(false)
+    val fit14DaysMode: StateFlow<Boolean> = _fit14DaysMode.asStateFlow()
+
+    private val chartViewportMap = java.util.concurrent.ConcurrentHashMap<String, ChartViewportState>()
 
     private val _showMA = MutableStateFlow(false)
     val showMA: StateFlow<Boolean> = _showMA.asStateFlow()
@@ -93,8 +109,8 @@ class TradingViewModel @JvmOverloads constructor(
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
 
     init {
-        repository.setSelectedSymbol("EURUSD")
-        repository.setSelectedTimeframe(Timeframe.M15)
+        repository.setSelectedSymbol("XAUUSD")
+        repository.setSelectedTimeframe(Timeframe.M5)
     }
 
     val filteredQuotes: StateFlow<List<SymbolQuote>> = combine(quotes, _searchQuery) { list, query ->
@@ -113,11 +129,50 @@ class TradingViewModel @JvmOverloads constructor(
     }.stateIn(
         viewModelScope,
         SharingStarted.Eagerly,
-        quotes.value.find { it.symbol == "EURUSD" } ?: quotes.value.firstOrNull()
+        quotes.value.find { it.symbol == "XAUUSD" } ?: quotes.value.firstOrNull()
     )
 
     fun initializeStorage(context: Context) {
         repository.initializeStorage(context)
+    }
+
+    fun toggleChartHistoryMove() {
+        val next = !chartHistoryMoveEnabled.value
+        repository.setChartHistoryMoveEnabled(next)
+        showNotification(
+            if (next) "Chart Trade History Move: ON"
+            else "Chart Trade History Move: OFF"
+        )
+    }
+
+    fun setChartHistoryMoveEnabled(enabled: Boolean) {
+        repository.setChartHistoryMoveEnabled(enabled)
+        showNotification(
+            if (enabled) "Chart Trade History Move: ON"
+            else "Chart Trade History Move: OFF"
+        )
+    }
+
+    fun toggleQuickTradeBar() {
+        _showQuickTradeBar.value = !_showQuickTradeBar.value
+    }
+
+    fun setFit14DaysMode(enabled: Boolean) {
+        _fit14DaysMode.value = enabled
+    }
+
+    fun getChartViewportState(symbol: String, timeframeLabel: String): ChartViewportState {
+        val key = "${symbol.uppercase(Locale.US)}_${timeframeLabel.uppercase(Locale.US)}"
+        return chartViewportMap[key] ?: ChartViewportState()
+    }
+
+    fun updateChartViewportState(
+        symbol: String,
+        timeframeLabel: String,
+        state: ChartViewportState
+    ) {
+        val key = "${symbol.uppercase(Locale.US)}_${timeframeLabel.uppercase(Locale.US)}"
+        chartViewportMap[key] = state
     }
 
     fun signInWithGoogle(activityContext: Context) {
@@ -207,16 +262,25 @@ class TradingViewModel @JvmOverloads constructor(
     }
 
     fun selectSymbol(symbol: String, navigateToChart: Boolean = false) {
-        _selectedSymbol.value = symbol
-        repository.setSelectedSymbol(symbol)
+        val cleanSym = symbol.trim().uppercase(Locale.US)
+        if (_selectedSymbol.value != cleanSym) {
+            _selectedSymbol.value = cleanSym
+            repository.setSelectedSymbol(cleanSym)
+        }
         if (navigateToChart) {
+            _showSettingsPage.value = false
+            _showAccountsPage.value = false
+            _showAboutPage.value = false
+            _isDrawerOpen.value = false
             _currentTab.value = MT5Tab.CHART
         }
     }
 
     fun selectTimeframe(tf: Timeframe) {
-        _selectedTimeframe.value = tf
-        repository.setSelectedTimeframe(tf)
+        if (_selectedTimeframe.value != tf) {
+            _selectedTimeframe.value = tf
+            repository.setSelectedTimeframe(tf)
+        }
     }
 
     fun setQuickTradeLot(lot: Double) {

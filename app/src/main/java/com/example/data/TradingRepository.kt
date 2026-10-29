@@ -43,22 +43,6 @@ class TradingRepository(private val scope: CoroutineScope) {
     // Initial Quotes ordered to match the MT5 Android Quotes screen screenshots
     private val initialQuotes = listOf(
         SymbolQuote(
-            symbol = "INRUSD",
-            description = "Indian Rupee vs US Dollar",
-            digits = 7,
-            bid = 0.0105271,
-            ask = 0.0105331,
-            low = 0.0105231,
-            high = 0.0105491,
-            changePoints = 0,
-            changePercent = 0.00,
-            spread = 60,
-            time = "15:52:47",
-            tickDirection = TickDirection.NEUTRAL,
-            bidDirection = TickDirection.NEUTRAL,
-            askDirection = TickDirection.NEUTRAL
-        ),
-        SymbolQuote(
             symbol = "EURUSD",
             description = "Euro vs US Dollar",
             digits = 5,
@@ -593,18 +577,22 @@ class TradingRepository(private val scope: CoroutineScope) {
     private var cloudAccountJob: Job? = null
     private var storageInitialized = false
 
+    private val _chartHistoryMoveEnabled = MutableStateFlow(true)
+    val chartHistoryMoveEnabled: StateFlow<Boolean> = _chartHistoryMoveEnabled.asStateFlow()
+
     val fastForexService: FastForexService = FastForexService.getInstance()
     val marketDataService: MarketDataService = MarketDataService.getInstance()
-    private val candleAggregator = CandleAggregator(Timeframe.M1)
+    private val candleAggregator = CandleAggregator(Timeframe.M5)
     val marketConnectionStatus: StateFlow<MarketConnectionStatus> = fastForexService.connectionStatus
 
     // Chart Candlestick data cache for each symbol and timeframe (14-day history)
     private val candleMap = java.util.concurrent.ConcurrentHashMap<String, MutableList<Candle>>()
+    private val loaded14DayKeys = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val _selectedPairCandles = MutableStateFlow<List<Candle>>(emptyList())
     val selectedPairCandles: StateFlow<List<Candle>> = _selectedPairCandles.asStateFlow()
 
     private var currentActiveSymbol: String = "XAUUSD"
-    private var currentActiveTimeframe: Timeframe = Timeframe.M1
+    private var currentActiveTimeframe: Timeframe = Timeframe.M5
     private val formatLock = Any()
 
     private fun formatTickTime(timestamp: Long): String = synchronized(formatLock) {
@@ -742,6 +730,7 @@ class TradingRepository(private val scope: CoroutineScope) {
                         real14dCandles
                     }
                     val syncedCandles = syncTradesIntoCandles(symbol, timeframe, mergedBase)
+                    loaded14DayKeys.add(key)
                     candleMap[key] = syncedCandles.toMutableList()
                     localStorage?.saveCandles(symbol, timeframe.name, syncedCandles)
 
@@ -777,17 +766,46 @@ class TradingRepository(private val scope: CoroutineScope) {
         }
     }
 
+    private fun filterCandlesToChartNow(candles: List<Candle>, timeframe: Timeframe): List<Candle> {
+        val intervalMs = (timeframe.minutes * 60_000L).coerceAtLeast(60_000L)
+        val clampedNow = SriLankaMarketHours.clampToLastOpenMarketTimestamp(SriLankaMarketHours.chartNowMillis())
+        val maxBucket = (clampedNow / intervalMs) * intervalMs
+        return candles.filter { it.timestamp <= 0L || it.timestamp <= maxBucket }
+    }
+
+    fun setChartHistoryMoveEnabled(enabled: Boolean) {
+        _chartHistoryMoveEnabled.value = enabled
+        localStorage?.saveChartHistoryMoveEnabled(enabled)
+    }
+
     fun setSelectedSymbol(symbol: String) {
-        currentActiveSymbol = symbol
-        fastForexService.setActiveSymbol(symbol)
-        val key = cacheKey(symbol, currentActiveTimeframe)
-        val q = _quotes.value.find { it.symbol == symbol } ?: initialQuotes.first()
-        val liveBid = fastForexService.getLivePrice(symbol).takeIf { it > 0.0 } ?: q.bid
-        val cached = candleMap[key]
-        val saved = localStorage?.loadCandles(symbol, currentActiveTimeframe.name).orEmpty()
+        val cleanSymbol = symbol.trim().uppercase(Locale.US)
+        if (cleanSymbol == currentActiveSymbol && _selectedPairCandles.value.isNotEmpty()) {
+            return
+        }
+        val outgoingKey = cacheKey(currentActiveSymbol, currentActiveTimeframe)
+        val outgoingCandles = candleAggregator.getCandles()
+        if (outgoingCandles.isNotEmpty()) {
+            candleMap[outgoingKey] = outgoingCandles.toMutableList()
+            localStorage?.saveCandles(currentActiveSymbol, currentActiveTimeframe.name, outgoingCandles)
+        }
+
+        currentActiveSymbol = cleanSymbol
+        fastForexService.setActiveSymbol(cleanSymbol)
+        val key = cacheKey(cleanSymbol, currentActiveTimeframe)
+        val q = _quotes.value.find { it.symbol == cleanSymbol } ?: initialQuotes.first()
+        val liveBid = fastForexService.getLivePrice(cleanSymbol).takeIf { it > 0.0 } ?: q.bid
+        val cached = candleMap[key]?.let { filterCandlesToChartNow(it, currentActiveTimeframe) }
+        val saved = filterCandlesToChartNow(
+            localStorage?.loadCandles(cleanSymbol, currentActiveTimeframe.name).orEmpty(),
+            currentActiveTimeframe
+        )
         val initialDisplay = when {
-            cached != null && cached.isNotEmpty() -> syncTradesIntoCandles(symbol, currentActiveTimeframe, cached)
-            saved.isNotEmpty() -> syncTradesIntoCandles(symbol, currentActiveTimeframe, saved)
+            cached != null && cached.isNotEmpty() -> syncTradesIntoCandles(cleanSymbol, currentActiveTimeframe, cached)
+            saved.isNotEmpty() -> {
+                loaded14DayKeys.add(key)
+                syncTradesIntoCandles(cleanSymbol, currentActiveTimeframe, saved)
+            }
             else -> {
                 val generated = generateInitialCandles(q.copy(bid = liveBid), currentActiveTimeframe)
                 candleMap[key] = generated.toMutableList()
@@ -797,26 +815,46 @@ class TradingRepository(private val scope: CoroutineScope) {
         candleMap[key] = initialDisplay.toMutableList()
         candleAggregator.seedHistory(initialDisplay)
         _selectedPairCandles.value = candleAggregator.getCandles()
-        load14DayHistoricalCandles(symbol, currentActiveTimeframe)
+        if (!loaded14DayKeys.contains(key)) {
+            load14DayHistoricalCandles(cleanSymbol, currentActiveTimeframe)
+        }
     }
 
     fun forceRefreshMarketData() {
+        val activeKey = cacheKey(currentActiveSymbol, currentActiveTimeframe)
+        loaded14DayKeys.remove(activeKey)
         fastForexService.forceRefresh(currentActiveSymbol)
         load14DayHistoricalCandles(currentActiveSymbol, currentActiveTimeframe)
     }
 
     fun setSelectedTimeframe(timeframe: Timeframe) {
+        if (timeframe == currentActiveTimeframe && _selectedPairCandles.value.isNotEmpty()) {
+            return
+        }
+        val outgoingKey = cacheKey(currentActiveSymbol, currentActiveTimeframe)
+        val outgoingCandles = candleAggregator.getCandles()
+        if (outgoingCandles.isNotEmpty()) {
+            candleMap[outgoingKey] = outgoingCandles.toMutableList()
+            localStorage?.saveCandles(currentActiveSymbol, currentActiveTimeframe.name, outgoingCandles)
+        }
+
         currentActiveTimeframe = timeframe
         candleAggregator.setTimeframe(timeframe)
         fastForexService.setActiveTimeframe(timeframe)
         val key = cacheKey(currentActiveSymbol, timeframe)
         val q = _quotes.value.find { it.symbol == currentActiveSymbol } ?: initialQuotes.first()
         val liveBid = fastForexService.getLivePrice(currentActiveSymbol).takeIf { it > 0.0 } ?: q.bid
-        val cached = candleMap[key]
-        val saved = localStorage?.loadCandles(currentActiveSymbol, timeframe.name).orEmpty()
+        val cached = candleMap[key]?.let { filterCandlesToChartNow(it, timeframe) }
+        val saved = filterCandlesToChartNow(
+            localStorage?.loadCandles(currentActiveSymbol, timeframe.name).orEmpty(),
+            timeframe
+        )
         val initialDisplay = when {
             cached != null && cached.isNotEmpty() -> syncTradesIntoCandles(currentActiveSymbol, timeframe, cached)
-            saved.isNotEmpty() -> syncTradesIntoCandles(currentActiveSymbol, timeframe, saved)
+            saved.isNotEmpty() -> {
+                loaded14DayKeys.add(key)
+                syncTradesIntoCandles(currentActiveSymbol, timeframe, saved)
+            }
             else -> {
                 val generated = generateInitialCandles(q.copy(bid = liveBid), timeframe)
                 candleMap[key] = generated.toMutableList()
@@ -826,7 +864,9 @@ class TradingRepository(private val scope: CoroutineScope) {
         candleMap[key] = initialDisplay.toMutableList()
         candleAggregator.seedHistory(initialDisplay)
         _selectedPairCandles.value = candleAggregator.getCandles()
-        load14DayHistoricalCandles(currentActiveSymbol, timeframe)
+        if (!loaded14DayKeys.contains(key)) {
+            load14DayHistoricalCandles(currentActiveSymbol, timeframe)
+        }
     }
 
     private fun generateInitialCandles(quote: SymbolQuote, tf: Timeframe = Timeframe.M1): List<Candle> {
@@ -1345,7 +1385,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val validOpenMs = if (rawOpenMs > 0L) {
             SriLankaMarketHours.clampToLastOpenMarketTimestamp(rawOpenMs)
         } else {
-            SriLankaMarketHours.clampToLastOpenMarketTimestamp(System.currentTimeMillis())
+            SriLankaMarketHours.clampToLastOpenMarketTimestamp(SriLankaMarketHours.chartNowMillis())
         }
         val validCloseMs = if (rawCloseMs > 0L) {
             SriLankaMarketHours.clampToLastOpenMarketTimestamp(rawCloseMs)
@@ -1896,6 +1936,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val appContext = context.applicationContext
         val local = LocalTradeStorage(appContext)
         localStorage = local
+        _chartHistoryMoveEnabled.value = local.loadChartHistoryMoveEnabled()
 
         // 1. Restore from local storage immediately so user trades, history & chart candles appear on app startup
         val savedAccount = local.loadAccount()
@@ -1933,10 +1974,11 @@ class TradingRepository(private val scope: CoroutineScope) {
         for (sym in tradedSymbols) {
             var hasSavedCandlesForSymbol = false
             Timeframe.values().forEach { tf ->
-                val savedCandles = local.loadCandles(sym, tf.name)
+                val savedCandles = filterCandlesToChartNow(local.loadCandles(sym, tf.name), tf)
                 if (savedCandles.isNotEmpty()) {
                     hasSavedCandlesForSymbol = true
                     val key = cacheKey(sym, tf)
+                    loaded14DayKeys.add(key)
                     candleMap[key] = savedCandles.toMutableList()
                     if (sym == currentActiveSymbol && tf == currentActiveTimeframe) {
                         candleAggregator.seedHistory(savedCandles)
@@ -1948,7 +1990,10 @@ class TradingRepository(private val scope: CoroutineScope) {
                 refreshSymbolCandlesWithTrades(sym)
             }
         }
-        load14DayHistoricalCandles(currentActiveSymbol, currentActiveTimeframe)
+        val activeKey = cacheKey(currentActiveSymbol, currentActiveTimeframe)
+        if (!loaded14DayKeys.contains(activeKey)) {
+            load14DayHistoricalCandles(currentActiveSymbol, currentActiveTimeframe)
+        }
 
         // 2. Attach Firebase Auth & Firestore Cloud Server sync off the main UI thread
         scope.launch(Dispatchers.IO) {
@@ -2139,7 +2184,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val closePriceNow = if (isBuy) quote.bid else quote.ask
         val newId = generateUniqueTicketNumber()
 
-        val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date()) }
+        val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
         val newPos = TradePosition(
             id = newId,
             symbol = symbol,
@@ -2178,7 +2223,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val quote = quoteMap[pos.symbol]
         val closePrice = if (quote != null) (if (pos.isBuy) quote.bid else quote.ask) else pos.currentPrice
         val exactProfit = calculatePositionProfitUsd(pos, closePrice, quoteMap)
-        val closeTimeFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date()) }
+        val closeTimeFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
         val formattedTicket = "#${if (pos.id >= 100000000L) pos.id else 385000000L + pos.id}"
 
         val closedTrade = HistoryTrade(
@@ -2230,7 +2275,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val remainingLots = roundTo2(pos.lots - closeLots)
         val closedPartPos = pos.copy(lots = closeLots)
         val proportionalProfit = calculatePositionProfitUsd(closedPartPos, closePrice, quoteMap)
-        val closeTimeFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date()) }
+        val closeTimeFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
         val formattedTicket = "#${if (pos.id >= 100000000L) pos.id else 385000000L + pos.id}"
 
         val closedTrade = HistoryTrade(
@@ -2338,7 +2383,7 @@ class TradingRepository(private val scope: CoroutineScope) {
     ): TradePosition {
         val cleanSymbol = symbol.trim().uppercase(Locale.US).ifBlank { "NDX100" }
         val safeLots = roundTo2(lots.coerceAtLeast(0.01))
-        val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date()) }
+        val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
         val cleanOpenTime = openTime.trim().ifBlank { nowFormatted }
 
         val parsedTicketNum = customTicketId?.removePrefix("#")?.trim()?.toLongOrNull()
@@ -2465,7 +2510,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val safeLots = roundTo2(lots.coerceAtLeast(0.01))
         val computedProfit = customProfit?.let { roundTo2(it) }
             ?: calculateHistoricalTradeProfit(cleanSymbol, isBuy, safeLots, openPrice, closePrice)
-        val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date()) }
+        val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
         val cleanCloseTime = closeTime.trim().ifBlank { nowFormatted }
         val cleanOpenTime = openTime.trim().ifBlank { cleanCloseTime }
 
@@ -2574,7 +2619,7 @@ class TradingRepository(private val scope: CoroutineScope) {
             localStorage?.saveNextPositionId(nextPositionId)
         }
         val cleanAmount = roundTo2(abs(amount).coerceAtLeast(0.01))
-        val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date()) }
+        val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
         val cleanCloseTime = closeTime.trim().ifBlank { nowFormatted }
         val cleanComment = comment.trim().ifBlank { "Withdrawal" }
         val candidateTicket = customTicketId?.trim()?.takeIf { it.isNotBlank() }?.let {

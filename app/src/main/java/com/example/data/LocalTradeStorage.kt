@@ -268,6 +268,14 @@ class LocalTradeStorage(context: Context) {
         }
     }
 
+    fun saveChartHistoryMoveEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_CHART_HISTORY_MOVE_ENABLED, enabled).apply()
+    }
+
+    fun loadChartHistoryMoveEnabled(): Boolean {
+        return prefs.getBoolean(KEY_CHART_HISTORY_MOVE_ENABLED, true)
+    }
+
     fun clearAll() {
         prefs.edit().clear().apply()
     }
@@ -280,5 +288,6 @@ class LocalTradeStorage(context: Context) {
         private const val KEY_NEXT_ID = "next_position_id"
         private const val KEY_SEEDED_DEFAULT_HISTORY = "seeded_default_history_v1"
         private const val KEY_CANDLES_PREFIX = "chart_candles_real_v6_"
+        private const val KEY_CHART_HISTORY_MOVE_ENABLED = "chart_history_move_enabled"
     }
 }

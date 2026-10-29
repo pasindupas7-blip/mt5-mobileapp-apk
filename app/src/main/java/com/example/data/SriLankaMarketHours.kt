@@ -17,6 +17,11 @@ object SriLankaMarketHours {
 
     val SRI_LANKA_TIME_ZONE: TimeZone = TimeZone.getTimeZone("Asia/Colombo")
 
+    // Aligns chart and candle timestamps 10 minutes earlier so they match TradingView's candle clock
+    const val CHART_TIME_OFFSET_MS: Long = 10L * 60_000L
+
+    fun chartNowMillis(): Long = System.currentTimeMillis() - CHART_TIME_OFFSET_MS
+
     // Monday 03:30 AM = 3 * 60 + 30 = 210 minutes from midnight
     private const val MONDAY_OPEN_MINUTE_OF_DAY = 3 * 60 + 30 // 210
 
@@ -102,7 +107,7 @@ object SriLankaMarketHours {
      * Generates a chronological list of [count] open-market candle bucket timestamps ending at [nowMs],
      * strictly within Monday 03:30 AM .. Saturday 02:29 AM Sri Lanka Time.
      */
-    fun buildOpenMarketTimestamps(count: Int, intervalMs: Long, nowMs: Long = System.currentTimeMillis()): LongArray {
+    fun buildOpenMarketTimestamps(count: Int, intervalMs: Long, nowMs: Long = chartNowMillis()): LongArray {
         val safeStep = intervalMs.coerceAtLeast(60_000L)
         val result = LongArray(count)
         if (count <= 0) return result
@@ -122,19 +127,19 @@ object SriLankaMarketHours {
         return result
     }
 
-    fun formatTickTime(timestampMs: Long = System.currentTimeMillis()): String {
+    fun formatTickTime(timestampMs: Long = chartNowMillis()): String {
         val sdf = SimpleDateFormat("HH:mm:ss", Locale.US)
         sdf.timeZone = SRI_LANKA_TIME_ZONE
         return sdf.format(Date(timestampMs))
     }
 
-    fun formatDateTime(timestampMs: Long = System.currentTimeMillis()): String {
+    fun formatDateTime(timestampMs: Long = chartNowMillis()): String {
         val sdf = SimpleDateFormat("yyyy.MM.dd HH:mm:ss", Locale.US)
         sdf.timeZone = SRI_LANKA_TIME_ZONE
         return sdf.format(Date(timestampMs))
     }
 
-    fun formatHistoryTimestamp(timestampMs: Long = System.currentTimeMillis()): String {
+    fun formatHistoryTimestamp(timestampMs: Long = chartNowMillis()): String {
         return formatDateTime(timestampMs)
     }
 
@@ -189,7 +194,7 @@ object SriLankaMarketHours {
     fun isWithinHistoryPeriod(
         dateStr: String,
         periodName: String,
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = chartNowMillis()
     ): Boolean {
         if (periodName == "CUSTOM") return true
         val itemMs = parseMt5DateTimeMillis(dateStr)

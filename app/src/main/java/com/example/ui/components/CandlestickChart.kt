@@ -1,10 +1,12 @@
 package com.example.ui.components
 
+import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -12,11 +14,18 @@ import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -30,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -40,6 +50,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -56,6 +67,7 @@ import com.example.model.SymbolQuote
 import com.example.model.TradePosition
 import com.example.ui.theme.ChartMA
 import com.example.ui.theme.MT5RobotoCondensedFontFamily
+import com.example.viewmodel.ChartViewportState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -63,11 +75,50 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.exp
 import kotlin.math.floor
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.round
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+
+private enum class HistoryDragHandle {
+    OPEN,
+    CLOSE,
+    BOTH
+}
+
+private data class EditableHistoryTradeState(
+    val originalTrade: HistoryTrade,
+    val isBuy: Boolean,
+    val openCandleIdx: Int,
+    val closeCandleIdx: Int,
+    val openPrice: Double,
+    val closePrice: Double,
+    val activeHandle: HistoryDragHandle = HistoryDragHandle.OPEN
+)
+
+private data class RenderedHistoryMarker(
+    val trade: HistoryTrade,
+    val isBuy: Boolean,
+    val openCandleIdx: Int,
+    val closeCandleIdx: Int,
+    val openPrice: Double,
+    val closePrice: Double,
+    val openTipX: Float,
+    val openTipY: Float,
+    val openBodyCenterY: Float,
+    val closeTipX: Float,
+    val closeTipY: Float,
+    val closeBodyCenterY: Float
+)
+
+private data class HitHistoryMarkerResult(
+    val marker: RenderedHistoryMarker,
+    val handle: HistoryDragHandle,
+    val distancePx: Float
+)
 
 /**
  * Plain non-observable holder for layout/draw metrics so Canvas never writes to Compose MutableState
@@ -77,9 +128,100 @@ private class ChartGestureMetrics {
     var minPanBound: Float = -120f
     var maxPanBound: Float = 10000f
     var chartWidthPx: Float = 800f
+    var chartHeightPx: Float = 1000f
     var candleOriginXPx: Float = 700f
     var totalCandleSlotPx: Float = 24f
+    var clampedPanPx: Float = 0f
+    var topGridMarginPx: Float = 20f
+    var gridSpanPx: Float = 900f
+    var topGridPriceVal: Double = 0.0
+    var totalGridPriceSpanVal: Double = 1.0
     var hoveredCandleIndex: Int = -1
+    val renderedHistoryMarkers = mutableListOf<RenderedHistoryMarker>()
+
+    fun yToPrice(y: Float): Double {
+        if (gridSpanPx <= 1f) return topGridPriceVal
+        val ratio = (y - topGridMarginPx) / gridSpanPx
+        return topGridPriceVal - ratio * totalGridPriceSpanVal
+    }
+
+    fun priceToY(price: Double): Float {
+        if (totalGridPriceSpanVal <= 0.0) return topGridMarginPx
+        val ratio = (topGridPriceVal - price) / totalGridPriceSpanVal
+        return (topGridMarginPx + ratio * gridSpanPx).toFloat()
+    }
+}
+
+private fun distancePointToSegment(p: Offset, a: Offset, b: Offset): Float {
+    val dx = b.x - a.x
+    val dy = b.y - a.y
+    val lenSq = dx * dx + dy * dy
+    if (lenSq <= 0.0001f) {
+        return hypot(p.x - a.x, p.y - a.y)
+    }
+    val t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq).coerceIn(0f, 1f)
+    val projX = a.x + t * dx
+    val projY = a.y + t * dy
+    return hypot(p.x - projX, p.y - projY)
+}
+
+private fun findHitHistoryMarker(
+    pos: Offset,
+    markers: List<RenderedHistoryMarker>,
+    arrowRadiusPx: Float,
+    segmentRadiusPx: Float,
+    prioritizeTradeId: Long? = null
+): HitHistoryMarkerResult? {
+    if (markers.isEmpty()) return null
+    val ordered = if (prioritizeTradeId != null) {
+        markers.sortedByDescending { it.trade.id == prioritizeTradeId }
+    } else {
+        markers
+    }
+
+    var bestArrowHit: HitHistoryMarkerResult? = null
+    var bestSegmentHit: HitHistoryMarkerResult? = null
+
+    for (m in ordered) {
+        val dOpenTip = hypot(pos.x - m.openTipX, pos.y - m.openTipY)
+        val dOpenBody = hypot(pos.x - m.openTipX, pos.y - m.openBodyCenterY)
+        val dOpen = min(dOpenTip, dOpenBody)
+
+        val dCloseTip = hypot(pos.x - m.closeTipX, pos.y - m.closeTipY)
+        val dCloseBody = hypot(pos.x - m.closeTipX, pos.y - m.closeBodyCenterY)
+        val dClose = min(dCloseTip, dCloseBody)
+
+        val minArrowDist = min(dOpen, dClose)
+        if (minArrowDist <= arrowRadiusPx) {
+            val handle = if (dOpen <= dClose) HistoryDragHandle.OPEN else HistoryDragHandle.CLOSE
+            val effectiveDist = if (prioritizeTradeId != null && m.trade.id == prioritizeTradeId) {
+                minArrowDist * 0.5f
+            } else {
+                minArrowDist
+            }
+            if (bestArrowHit == null || effectiveDist < bestArrowHit.distancePx) {
+                bestArrowHit = HitHistoryMarkerResult(m, handle, effectiveDist)
+            }
+        } else {
+            val dSeg = distancePointToSegment(
+                pos,
+                Offset(m.openTipX, m.openTipY),
+                Offset(m.closeTipX, m.closeTipY)
+            )
+            if (dSeg <= segmentRadiusPx) {
+                val effectiveDist = if (prioritizeTradeId != null && m.trade.id == prioritizeTradeId) {
+                    dSeg * 0.5f
+                } else {
+                    dSeg
+                }
+                if (bestSegmentHit == null || effectiveDist < bestSegmentHit.distancePx) {
+                    bestSegmentHit = HitHistoryMarkerResult(m, HistoryDragHandle.BOTH, effectiveDist)
+                }
+            }
+        }
+    }
+
+    return bestArrowHit ?: bestSegmentHit
 }
 
 private data class ResolvedChartHistoryTrade(
@@ -122,25 +264,60 @@ fun CandlestickChart(
     candles: List<Candle>,
     positions: List<TradePosition> = emptyList(),
     historyTrades: List<HistoryTrade> = emptyList(),
-    timeframeLabel: String = "M1",
+    timeframeLabel: String = "M5",
     isDarkMode: Boolean = false,
     showMA: Boolean = false,
     maPeriod: Int = 20,
     showCrosshair: Boolean = false,
     fit14DaysMode: Boolean = false,
     onFit14DaysChange: ((Boolean) -> Unit)? = null,
+    enableHistoryTradeMove: Boolean = true,
+    initialViewportState: ChartViewportState = ChartViewportState(),
+    onViewportStateChange: ((ChartViewportState) -> Unit)? = null,
     onSymbolClick: (() -> Unit)? = null,
     onMoreOptionsClick: (() -> Unit)? = null,
     onCanvasTouch: (() -> Unit)? = null,
+    onCalculateHistoryProfit: ((isBuy: Boolean, lots: Double, openPrice: Double, closePrice: Double) -> Double)? = null,
+    onSaveHistoryTradeEdit: ((
+        trade: HistoryTrade,
+        isBuy: Boolean,
+        openPrice: Double,
+        closePrice: Double,
+        openTime: String,
+        closeTime: String
+    ) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val textMeasurer = rememberTextMeasurer()
     val coroutineScope = rememberCoroutineScope()
+    val localView = LocalView.current
 
-    var panOffsetPx by remember(quote.symbol) { mutableFloatStateOf(0f) }
-    var zoomScale by remember(quote.symbol) { mutableFloatStateOf(1.0f) }
+    var panOffsetPx by remember(quote.symbol, timeframeLabel) { mutableFloatStateOf(initialViewportState.panOffsetPx) }
+    var zoomScale by remember(quote.symbol, timeframeLabel) { mutableFloatStateOf(initialViewportState.zoomScale) }
+    var priceAxisZoom by remember(quote.symbol, timeframeLabel) { mutableFloatStateOf(initialViewportState.priceAxisZoom) }
+    var verticalPanPriceOffset by remember(quote.symbol, timeframeLabel) { mutableStateOf(initialViewportState.verticalPanPriceOffset) }
     var isFit14Days by remember { mutableStateOf(fit14DaysMode) }
     var crosshairPos by remember { mutableStateOf<Offset?>(null) }
+    var editingTradeState by remember(quote.symbol, timeframeLabel) {
+        mutableStateOf<EditableHistoryTradeState?>(null)
+    }
+
+    LaunchedEffect(enableHistoryTradeMove) {
+        if (!enableHistoryTradeMove) {
+            editingTradeState = null
+        }
+    }
+
+    LaunchedEffect(quote.symbol, timeframeLabel, panOffsetPx, zoomScale, priceAxisZoom, verticalPanPriceOffset) {
+        onViewportStateChange?.invoke(
+            ChartViewportState(
+                panOffsetPx = panOffsetPx,
+                zoomScale = zoomScale,
+                priceAxisZoom = priceAxisZoom,
+                verticalPanPriceOffset = verticalPanPriceOffset
+            )
+        )
+    }
 
     val metrics = remember(quote.symbol) { ChartGestureMetrics() }
     var flingJob by remember { mutableStateOf<Job?>(null) }
@@ -168,10 +345,10 @@ fun CandlestickChart(
         mins * 60_000L
     }
 
-    var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    var nowMillis by remember { mutableStateOf(com.example.data.SriLankaMarketHours.chartNowMillis()) }
     LaunchedEffect(Unit) {
         while (isActive) {
-            nowMillis = System.currentTimeMillis()
+            nowMillis = com.example.data.SriLankaMarketHours.chartNowMillis()
             kotlinx.coroutines.delay(1000L)
         }
     }
@@ -224,8 +401,6 @@ fun CandlestickChart(
     val gridColor = if (isDarkMode) Color(0xFF1F242D) else Color(0xFFEBEBEB)
     val axisBorderColor = if (isDarkMode) Color(0xFF2C313A) else Color(0xFFD5D7DB)
     val axisTextColor = if (isDarkMode) Color(0xFFE5E7EB) else Color(0xFF1A1A1A)
-    val overlayTitleColor = if (isDarkMode) Color(0xFFE5E7EB) else Color(0xFF374151)
-    val overlaySubColor = if (isDarkMode) Color(0xFF9CA3AF) else Color(0xFF6B7280)
 
     val bullishColor = Color(0xFF26A69A)
     val bearishColor = Color(0xFFEF5350)
@@ -330,17 +505,80 @@ fun CandlestickChart(
     val currentShowCrosshair by rememberUpdatedState(showCrosshair)
     val currentIsFit14Days by rememberUpdatedState(isFit14Days)
     val currentOnFit14DaysChange by rememberUpdatedState(onFit14DaysChange)
+    val currentEnableHistoryTradeMove by rememberUpdatedState(enableHistoryTradeMove)
     val currentOnCanvasTouch by rememberUpdatedState(onCanvasTouch)
+    val currentDisplayCandles by rememberUpdatedState(displayCandles)
+    val currentEditingTradeState by rememberUpdatedState(editingTradeState)
+    val currentAnimOpen by rememberUpdatedState(animOpen)
+    val currentAnimClose by rememberUpdatedState(animClose)
+    val currentAnimHigh by rememberUpdatedState(animHigh)
+    val currentAnimLow by rememberUpdatedState(animLow)
+
+    fun getCandleLowHigh(idx: Int, candlesList: List<Candle>): Pair<Double, Double> {
+        if (candlesList.isEmpty()) return Pair(quote.bid, quote.ask)
+        val safeIdx = idx.coerceIn(0, candlesList.lastIndex)
+        val c = candlesList[safeIdx]
+        val isLast = safeIdx == candlesList.lastIndex
+        val cOpen = if (isLast) currentAnimOpen else c.open
+        val cClose = if (isLast) currentAnimClose else c.close
+        val cHigh = max(if (isLast) currentAnimHigh else c.high, max(cOpen, cClose))
+        val cLow = min(if (isLast) currentAnimLow else c.low, min(cOpen, cClose))
+        return Pair(cLow, cHigh)
+    }
+
+    fun clampPriceStrictlyInsideCandle(rawPrice: Double, idx: Int, candlesList: List<Candle>): Double {
+        val (cLow, cHigh) = getCandleLowHigh(idx, candlesList)
+        val clamped = rawPrice.coerceIn(cLow, cHigh)
+        val rounded = round(clamped * pointMultiplier) / pointMultiplier
+        return rounded.coerceIn(cLow, cHigh)
+    }
+
+    fun xToNearestCandleIndex(xPx: Float, candlesCount: Int): Int {
+        if (candlesCount <= 0) return 0
+        val slot = metrics.totalCandleSlotPx.coerceAtLeast(1f)
+        val rawIdx = (candlesCount - 1).toFloat() - ((metrics.candleOriginXPx + metrics.clampedPanPx - xPx) / slot)
+        return round(rawIdx).toInt().coerceIn(0, candlesCount - 1)
+    }
 
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(bgColor)
-            .pointerInput(quote.symbol) {
+            .pointerInput(quote.symbol, timeframeLabel) {
+                val arrowHitRadiusPx = 32.dp.toPx()
+                val segmentHitRadiusPx = 22.dp.toPx()
+                val touchSlopPx = 10.dp.toPx()
+
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
                     currentOnCanvasTouch?.invoke()
                     flingJob?.cancel()
+
+                    // 1. Check if touch started on the Right-Side Price Axis List (for vertical drag zoom:
+                    //    dragging from bottom to top zooms IN vertically like 868916349 -> 851708774 -> 869207484 -> 859133655;
+                    //    dragging from top to bottom zooms OUT vertically)
+                    val isTouchOnRightPriceAxis = down.position.x >= (metrics.chartWidthPx - 10.dp.toPx()) &&
+                        down.position.y <= (metrics.chartHeightPx - 28.dp.toPx())
+
+                    if (isTouchOnRightPriceAxis) {
+                        do {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+
+                            val panChange = event.calculatePan()
+                            if (abs(panChange.y) > 0.1f) {
+                                // Dragging bottom-to-top (panChange.y < 0) increases priceAxisZoom (zooms in vertically)
+                                // Dragging top-to-bottom (panChange.y > 0) decreases priceAxisZoom (zooms out vertically)
+                                priceAxisZoom = (priceAxisZoom * exp(-panChange.y / 155f)).coerceIn(0.25f, 6.0f)
+                                if (abs(priceAxisZoom - 1.0f) < 0.03f) {
+                                    verticalPanPriceOffset = 0.0
+                                }
+                                event.changes.forEach { if (it.positionChanged()) it.consume() }
+                            }
+                        } while (event.changes.any { it.pressed })
+                        return@awaitEachGesture
+                    }
 
                     if (currentShowCrosshair) {
                         crosshairPos = down.position
@@ -354,19 +592,181 @@ fun CandlestickChart(
                                 }
                             }
                         } while (event.changes.any { it.pressed })
-                    } else {
-                        val velocityTracker = VelocityTracker()
-                        velocityTracker.addPosition(down.uptimeMillis, down.position)
+                        return@awaitEachGesture
+                    }
+
+                    // 2. Check if touch is on a History Trade marker on the chart (only when enabled in About settings)
+                    val activeEdit = if (currentEnableHistoryTradeMove) currentEditingTradeState else null
+                    val hitResult = if (currentEnableHistoryTradeMove) {
+                        findHitHistoryMarker(
+                            pos = down.position,
+                            markers = metrics.renderedHistoryMarkers,
+                            arrowRadiusPx = arrowHitRadiusPx,
+                            segmentRadiusPx = segmentHitRadiusPx,
+                            prioritizeTradeId = activeEdit?.originalTrade?.id
+                        )
+                    } else null
+
+                    var draggingHistoryTrade = false
+                    var dragHandle = HistoryDragHandle.OPEN
+
+                    if (activeEdit != null && hitResult != null && hitResult.marker.trade.id == activeEdit.originalTrade.id) {
+                        // Already in Edit Mode for this trade: allow immediate dragging of its Entry arrow, Exit arrow, or Both!
+                        draggingHistoryTrade = true
+                        dragHandle = hitResult.handle
+                        editingTradeState = activeEdit.copy(activeHandle = dragHandle)
+                    } else if (hitResult != null) {
+                        // Wait for long-press (~280ms hold) on the history trade marker to activate Move/Edit Mode
+                        var movedOrMultiTouch = false
+                        var releasedEarly = false
+                        val timedOut = withTimeoutOrNull(280L) {
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                val pressed = ev.changes.filter { it.pressed }
+                                if (pressed.isEmpty()) {
+                                    releasedEarly = true
+                                    break
+                                }
+                                if (pressed.size >= 2) {
+                                    movedOrMultiTouch = true
+                                    break
+                                }
+                                val curPos = pressed.first().position
+                                if (hypot(curPos.x - down.position.x, curPos.y - down.position.y) > touchSlopPx) {
+                                    movedOrMultiTouch = true
+                                    break
+                                }
+                            }
+                        } == null
+
+                        if (timedOut && !movedOrMultiTouch && !releasedEarly) {
+                            localView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            val m = hitResult.marker
+                            val candlesList = currentDisplayCandles
+                            val safeOpenIdx = m.openCandleIdx.coerceIn(0, (candlesList.size - 1).coerceAtLeast(0))
+                            val safeCloseIdx = m.closeCandleIdx.coerceIn(0, (candlesList.size - 1).coerceAtLeast(0))
+                            val clampedOpenP = clampPriceStrictlyInsideCandle(m.openPrice, safeOpenIdx, candlesList)
+                            val clampedCloseP = clampPriceStrictlyInsideCandle(m.closePrice, safeCloseIdx, candlesList)
+
+                            dragHandle = hitResult.handle
+                            editingTradeState = EditableHistoryTradeState(
+                                originalTrade = m.trade,
+                                isBuy = m.isBuy,
+                                openCandleIdx = safeOpenIdx,
+                                closeCandleIdx = safeCloseIdx,
+                                openPrice = clampedOpenP,
+                                closePrice = clampedCloseP,
+                                activeHandle = dragHandle
+                            )
+                            draggingHistoryTrade = true
+                        } else if (releasedEarly) {
+                            return@awaitEachGesture
+                        }
+                    }
+
+                    if (draggingHistoryTrade) {
+                        val startEdit = editingTradeState ?: return@awaitEachGesture
+                        val candlesList = currentDisplayCandles
+                        val anchorTouchCandleIdx = xToNearestCandleIndex(down.position.x, candlesList.size)
+                        val anchorTouchPrice = metrics.yToPrice(down.position.y)
+                        val startOpenIdx = startEdit.openCandleIdx
+                        val startCloseIdx = startEdit.closeCandleIdx
+                        val startOpenPrice = startEdit.openPrice
+                        val startClosePrice = startEdit.closePrice
 
                         do {
                             val event = awaitPointerEvent()
-                            val pressedCount = event.changes.count { it.pressed }
-                            if (pressedCount == 0) break
+                            val primary = event.changes.firstOrNull { it.pressed } ?: break
+                            val curCandles = currentDisplayCandles
+                            if (curCandles.isNotEmpty()) {
+                                val targetIdx = xToNearestCandleIndex(primary.position.x, curCandles.size)
+                                val rawTouchPrice = metrics.yToPrice(primary.position.y)
+                                val currentState = editingTradeState ?: startEdit
 
-                            val zoomChange = event.calculateZoom()
-                            val panChange = event.calculatePan()
+                                editingTradeState = when (currentState.activeHandle) {
+                                    HistoryDragHandle.OPEN -> {
+                                        val newOpenIdx = targetIdx
+                                        val newOpenPrice = clampPriceStrictlyInsideCandle(rawTouchPrice, newOpenIdx, curCandles)
+                                        if (newOpenIdx > currentState.closeCandleIdx) {
+                                            val newClosePrice = clampPriceStrictlyInsideCandle(currentState.closePrice, newOpenIdx, curCandles)
+                                            currentState.copy(
+                                                openCandleIdx = newOpenIdx,
+                                                closeCandleIdx = newOpenIdx,
+                                                openPrice = newOpenPrice,
+                                                closePrice = newClosePrice
+                                            )
+                                        } else {
+                                            currentState.copy(
+                                                openCandleIdx = newOpenIdx,
+                                                openPrice = newOpenPrice
+                                            )
+                                        }
+                                    }
+                                    HistoryDragHandle.CLOSE -> {
+                                        val newCloseIdx = targetIdx
+                                        val newClosePrice = clampPriceStrictlyInsideCandle(rawTouchPrice, newCloseIdx, curCandles)
+                                        if (newCloseIdx < currentState.openCandleIdx) {
+                                            val newOpenPrice = clampPriceStrictlyInsideCandle(currentState.openPrice, newCloseIdx, curCandles)
+                                            currentState.copy(
+                                                openCandleIdx = newCloseIdx,
+                                                closeCandleIdx = newCloseIdx,
+                                                openPrice = newOpenPrice,
+                                                closePrice = newClosePrice
+                                            )
+                                        } else {
+                                            currentState.copy(
+                                                closeCandleIdx = newCloseIdx,
+                                                closePrice = newClosePrice
+                                            )
+                                        }
+                                    }
+                                    HistoryDragHandle.BOTH -> {
+                                        val deltaIdx = targetIdx - anchorTouchCandleIdx
+                                        val deltaPrice = rawTouchPrice - anchorTouchPrice
+                                        val span = (startCloseIdx - startOpenIdx).coerceAtLeast(0)
+                                        val maxValidOpen = (curCandles.lastIndex - span).coerceAtLeast(0)
+                                        val newOpenIdx = (startOpenIdx + deltaIdx).coerceIn(0, maxValidOpen)
+                                        val newCloseIdx = (newOpenIdx + span).coerceIn(newOpenIdx, curCandles.lastIndex)
+                                        val newOpenPrice = clampPriceStrictlyInsideCandle(startOpenPrice + deltaPrice, newOpenIdx, curCandles)
+                                        val newClosePrice = clampPriceStrictlyInsideCandle(startClosePrice + deltaPrice, newCloseIdx, curCandles)
+                                        currentState.copy(
+                                            openCandleIdx = newOpenIdx,
+                                            closeCandleIdx = newCloseIdx,
+                                            openPrice = newOpenPrice,
+                                            closePrice = newClosePrice
+                                        )
+                                    }
+                                }
+                            }
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        } while (event.changes.any { it.pressed })
+                        return@awaitEachGesture
+                    }
 
-                            if (pressedCount >= 2 && abs(zoomChange - 1f) > 0.004f) {
+                    // 3. Normal chart & bottom timeline pan + 2-finger pinch-to-zoom gesture loop
+                    val velocityTracker = VelocityTracker()
+                    velocityTracker.addPosition(down.uptimeMillis, down.position)
+                    val initialPanAtGestureStart = panOffsetPx
+                    var wasMultiTouchZoom = false
+
+                    do {
+                        val event = awaitPointerEvent()
+                        val pressedChanges = event.changes.filter { it.pressed }
+                        val pressedCount = pressedChanges.size
+                        if (pressedCount == 0) break
+
+                        val zoomChange = event.calculateZoom()
+                        val panChange = event.calculatePan()
+
+                        if (pressedCount >= 2) {
+                            if (!wasMultiTouchZoom) {
+                                wasMultiTouchZoom = true
+                                // Restore initial right-edge alignment if finger-1 slightly nudged panOffsetPx before finger-2 landed
+                                if (abs(initialPanAtGestureStart) <= 24f) {
+                                    panOffsetPx = 0f
+                                }
+                            }
+                            if (abs(zoomChange - 1f) > 0.0015f) {
                                 if (currentIsFit14Days) {
                                     isFit14Days = false
                                     currentOnFit14DaysChange?.invoke(false)
@@ -376,8 +776,8 @@ fun CandlestickChart(
                                 val actualRatio = newZoom / oldZoom
                                 zoomScale = newZoom
 
-                                if (panOffsetPx <= 4f) {
-                                    // Keep right-edge chart view anchored when zooming in/out near the live bar
+                                if (abs(panOffsetPx) <= 24f) {
+                                    // Keep right-edge chart shift anchored when zooming in/out near the live bar (matching 876703870..869442267)
                                     panOffsetPx = 0f
                                 } else {
                                     val centroid = event.calculateCentroid(useCurrent = false)
@@ -386,9 +786,10 @@ fun CandlestickChart(
                                     panOffsetPx = ((originX + panOffsetPx - focusX) * actualRatio - originX + focusX)
                                         .coerceIn(metrics.minPanBound, metrics.maxPanBound)
                                 }
-
-                                event.changes.forEach { if (it.positionChanged()) it.consume() }
-                            } else if (abs(panChange.x) > 0.1f) {
+                            }
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        } else if (!wasMultiTouchZoom && (abs(panChange.x) > 0.1f || abs(panChange.y) > 0.1f)) {
+                            if (abs(panChange.x) > 0.1f) {
                                 if (currentIsFit14Days) {
                                     val defaultSlotPx = 9.5.dp.toPx()
                                     if (defaultSlotPx > 0f && metrics.totalCandleSlotPx > 0f) {
@@ -401,30 +802,37 @@ fun CandlestickChart(
                                 panOffsetPx = (panOffsetPx + panChange.x)
                                     .coerceIn(metrics.minPanBound, metrics.maxPanBound)
 
-                                val primaryChange = event.changes.firstOrNull { it.pressed }
+                                val primaryChange = pressedChanges.firstOrNull()
                                 if (primaryChange != null) {
                                     velocityTracker.addPosition(primaryChange.uptimeMillis, primaryChange.position)
                                 }
-                                event.changes.forEach { if (it.positionChanged()) it.consume() }
                             }
-                        } while (event.changes.any { it.pressed })
+                            if (abs(panChange.y) > 0.5f && priceAxisZoom > 1.15f && down.position.y < metrics.chartHeightPx) {
+                                val priceDelta = (panChange.y / metrics.gridSpanPx.coerceAtLeast(1f)) * metrics.totalGridPriceSpanVal
+                                verticalPanPriceOffset = (verticalPanPriceOffset + priceDelta).coerceIn(
+                                    -metrics.totalGridPriceSpanVal * 1.5,
+                                    metrics.totalGridPriceSpanVal * 1.5
+                                )
+                            }
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
 
-                        val velocityX = velocityTracker.calculateVelocity().x
-                        if (abs(velocityX) > 140f && !currentIsFit14Days) {
-                            flingJob = coroutineScope.launch {
-                                var v = velocityX.coerceIn(-4500f, 4500f)
-                                var lastTime = 0L
-                                while (isActive && abs(v) > 25f) {
-                                    withFrameNanos { nanos ->
-                                        val dt = if (lastTime == 0L) 0.016f else ((nanos - lastTime) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
-                                        lastTime = nanos
-                                        val nextPan = (panOffsetPx + v * dt).coerceIn(metrics.minPanBound, metrics.maxPanBound)
-                                        if (abs(nextPan - panOffsetPx) < 0.05f) {
-                                            v = 0f
-                                        } else {
-                                            panOffsetPx = nextPan
-                                            v *= exp(-4.8f * dt)
-                                        }
+                    val velocityX = velocityTracker.calculateVelocity().x
+                    if (!wasMultiTouchZoom && abs(velocityX) > 140f && !currentIsFit14Days) {
+                        flingJob = coroutineScope.launch {
+                            var v = velocityX.coerceIn(-4500f, 4500f)
+                            var lastTime = 0L
+                            while (isActive && abs(v) > 25f) {
+                                withFrameNanos { nanos ->
+                                    val dt = if (lastTime == 0L) 0.016f else ((nanos - lastTime) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
+                                    lastTime = nanos
+                                    val nextPan = (panOffsetPx + v * dt).coerceIn(metrics.minPanBound, metrics.maxPanBound)
+                                    if (abs(nextPan - panOffsetPx) < 0.05f) {
+                                        v = 0f
+                                    } else {
+                                        panOffsetPx = nextPan
+                                        v *= exp(-4.8f * dt)
                                     }
                                 }
                             }
@@ -433,11 +841,19 @@ fun CandlestickChart(
                 }
             }
             .pointerInput(showCrosshair) {
-                detectTapGestures { offset ->
-                    if (showCrosshair) {
-                        crosshairPos = if (crosshairPos == null) offset else null
+                detectTapGestures(
+                    onDoubleTap = { offset ->
+                        if (offset.x >= metrics.chartWidthPx - 12.dp.toPx()) {
+                            priceAxisZoom = 1.0f
+                            verticalPanPriceOffset = 0.0
+                        }
+                    },
+                    onTap = { offset ->
+                        if (showCrosshair) {
+                            crosshairPos = if (crosshairPos == null) offset else null
+                        }
                     }
-                }
+                )
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -450,24 +866,29 @@ fun CandlestickChart(
 
             if (chartWidth <= 0f || chartHeight <= 0f) return@Canvas
 
-            // Authentic MT5 right-side chart shift margin:
-            // Compact (~12dp) when zoomed in, expanding up to ~36% of chartWidth when zoomed out
-            // so the right future grid space is visible just like in Screenshots 1 and 4.
+            // 11 evenly-spaced vertical grid columns (col = 0..10) across chartWidth matching all 9 MT5 screenshots:
+            // - Column 0, Column 3, Column 6, Column 9 display the 4 bottom timeline labels
+            // - Column 7 is the default anchor position for the latest live candle (with Column 6 when zoomed far out)
+            val numVertGridCols = 11
+            val firstVertGridX = (chartWidth * 0.022f).coerceAtLeast(6.dp.toPx())
+            val lastVertGridX = (chartWidth * 0.985f).coerceAtMost(chartWidth - 4.dp.toPx())
+            val vertGridSpacingPx = ((lastVertGridX - firstVertGridX) / (numVertGridCols - 1).toFloat()).coerceAtLeast(16f)
+
+            val col7X = firstVertGridX + 7f * vertGridSpacingPx
+            val col6X = firstVertGridX + 6f * vertGridSpacingPx
             val zoomOutShiftFraction = if (isFit14Days) {
                 0f
-            } else if (zoomScale < 0.95f) {
-                ((0.95f - zoomScale) / 0.81f).coerceIn(0f, 1f)
+            } else if (zoomScale < 0.65f) {
+                ((0.65f - zoomScale) / 0.45f).coerceIn(0f, 1f)
             } else {
                 0f
             }
-            val rightMargin = if (isFit14Days) {
-                20.dp.toPx()
+            val candleOriginX = if (isFit14Days) {
+                chartWidth - 20.dp.toPx()
             } else {
-                val baseMargin = 12.dp.toPx()
-                val maxZoomOutMargin = chartWidth * 0.36f
-                baseMargin + (maxZoomOutMargin - baseMargin) * zoomOutShiftFraction
+                col7X - (col7X - col6X) * zoomOutShiftFraction
             }
-            val candleOriginX = chartWidth - rightMargin
+            val rightMargin = (chartWidth - candleOriginX).coerceAtLeast(12.dp.toPx())
 
             val usableWidth = (chartWidth - rightMargin - 8.dp.toPx()).coerceAtLeast(60f)
             val totalCandleSlot = if (isFit14Days) {
@@ -493,10 +914,12 @@ fun CandlestickChart(
             metrics.minPanBound = computedMinPan
             metrics.maxPanBound = computedMaxPan
             metrics.chartWidthPx = chartWidth
+            metrics.chartHeightPx = chartHeight
             metrics.candleOriginXPx = candleOriginX
             metrics.totalCandleSlotPx = totalCandleSlot
 
             val clampedPan = if (isFit14Days) 0f else panOffsetPx.coerceIn(computedMinPan, computedMaxPan)
+            metrics.clampedPanPx = clampedPan
 
             val floatLastIdx = (n - 1).toFloat()
             val idxAtLeftEdge = floatLastIdx - ((candleOriginX + clampedPan + totalCandleSlot * 2f) / totalCandleSlot)
@@ -507,6 +930,8 @@ fun CandlestickChart(
 
             var minPrice = Double.MAX_VALUE
             var maxPrice = -Double.MAX_VALUE
+            var minBodyPrice = Double.MAX_VALUE
+            var maxBodyPrice = -Double.MAX_VALUE
 
             for (globalIdx in leftIndex..rightIndex) {
                 val x = candleOriginX - ((n - 1 - globalIdx) * totalCandleSlot) + clampedPan
@@ -522,6 +947,8 @@ fun CandlestickChart(
                 if (cLow > 0.0 && cHigh > 0.0) {
                     minPrice = min(minPrice, cLow)
                     maxPrice = max(maxPrice, cHigh)
+                    minBodyPrice = min(minBodyPrice, min(cOpen, cClose))
+                    maxBodyPrice = max(maxBodyPrice, max(cOpen, cClose))
                 }
             }
 
@@ -530,6 +957,8 @@ fun CandlestickChart(
                     val c = displayCandles[globalIdx]
                     minPrice = min(minPrice, c.low)
                     maxPrice = max(maxPrice, c.high)
+                    minBodyPrice = min(minBodyPrice, min(c.open, c.close))
+                    maxBodyPrice = max(maxBodyPrice, max(c.open, c.close))
                 }
             }
 
@@ -561,7 +990,7 @@ fun CandlestickChart(
                 }
             }
 
-            // Include visible historical trades in minPrice/maxPrice so trade arrows are always within the viewport
+            // Include visible historical trades in minPrice/maxPrice so trade arrows are within the default viewport
             if (resolvedHistoryMarkers.isNotEmpty()) {
                 val visibleSpan = (maxPrice - minPrice).coerceAtLeast(0.0001)
                 resolvedHistoryMarkers.forEach { marker ->
@@ -589,41 +1018,39 @@ fun CandlestickChart(
             } else {
                 rawRange
             }
-            // Smoothly adjust vertical price padding across zoom levels:
-            // - Zoomed In (Screenshot 1): compact padding (~0.04) so candles & trade connectors stretch tall
-            // - Medium Zoom (Screenshot 2): moderate padding (~0.18..0.22)
-            // - Max Zoom Out (Screenshot 3): expanded padding (~1.40) so candles & trade arrows compress vertically
-            val zoomInTightenFraction = if (isFit14Days) {
-                0f
-            } else if (zoomScale > 1.0f) {
-                ((zoomScale - 1.0f) / 0.65f).coerceIn(0f, 1f)
-            } else {
-                0f
-            }
-            val verticalZoomPaddingFactor = if (isFit14Days) {
-                0.22
-            } else {
-                val basePad = 0.12 - (zoomInTightenFraction.toDouble() * 0.08)
-                val outShift = zoomOutShiftFraction.toDouble()
-                basePad + (outShift * 0.24) + (outShift * outShift * 1.04)
-            }
-            val rawPadding = effectiveRange * verticalZoomPaddingFactor
+
+            // Default vertical padding (~0.40 on each side so 29255..29602 spans ~29080..29760 like Screenshots 5..9),
+            // scaled dynamically by `priceAxisZoom` when the user drags bottom-to-top or top-to-bottom on the right price axis!
+            val basePaddingFactor = if (isFit14Days) 0.22 else 0.40
+            val rawPadding = effectiveRange * basePaddingFactor
             val numHorizontalLines = 18
             val topGridMargin = 13.dp.toPx()
             val bottomGridMargin = 20.dp.toPx()
             val gridSpanPx = (chartHeight - topGridMargin - bottomGridMargin).coerceAtLeast(100f)
 
-            // Round step between horizontal grid lines to exact symbol point precision so every grid row
-            // has a clean, uniform price step (just like 0.40, 0.75, 1.75, 8.20 in the MT5 screenshots)
-            val targetGridPriceSpan = effectiveRange + rawPadding * 2.0
+            // Apply right-axis vertical drag zoom (`priceAxisZoom`) to the price span
+            val unzoomedGridPriceSpan = effectiveRange + rawPadding * 2.0
+            val targetGridPriceSpan = (unzoomedGridPriceSpan / priceAxisZoom.toDouble())
+                .coerceAtLeast(minPointStep * (numHorizontalLines - 1).toDouble())
             val rawStepPerLine = targetGridPriceSpan / (numHorizontalLines - 1).toDouble()
             val roundedStepPoints = max(1L, kotlin.math.round(rawStepPerLine * pointMultiplier).toLong())
             val exactPriceStep = roundedStepPoints.toDouble() / pointMultiplier
             val totalGridPriceSpan = exactPriceStep * (numHorizontalLines - 1).toDouble()
 
-            val midPrice = (minPrice + maxPrice) * 0.5
+            val wickMidPrice = (minPrice + maxPrice) * 0.5
+            val bodyMidPrice = if (minBodyPrice < Double.MAX_VALUE && maxBodyPrice > 0.0) {
+                (minBodyPrice + maxBodyPrice) * 0.5
+            } else {
+                wickMidPrice
+            }
+            val zoomInCenterBlend = ((priceAxisZoom - 1.0f) / 0.85f).coerceIn(0f, 1f).toDouble()
+            val midPrice = wickMidPrice + (bodyMidPrice - wickMidPrice) * zoomInCenterBlend + verticalPanPriceOffset
             val topGridPrice = (kotlin.math.round((midPrice + totalGridPriceSpan * 0.5) * pointMultiplier) / pointMultiplier)
-            val bottomGridPrice = topGridPrice - totalGridPriceSpan
+
+            metrics.topGridMarginPx = topGridMargin
+            metrics.gridSpanPx = gridSpanPx
+            metrics.topGridPriceVal = topGridPrice
+            metrics.totalGridPriceSpanVal = totalGridPriceSpan
 
             fun priceToY(price: Double): Float {
                 val ratio = (topGridPrice - price) / totalGridPriceSpan
@@ -637,8 +1064,7 @@ fun CandlestickChart(
 
             val gridDash = PathEffect.dashPathEffect(floatArrayOf(3.5.dp.toPx(), 3.5.dp.toPx()), 0f)
 
-            // Draw horizontal dashed price grid lines (including any line in the top/bottom margin)
-            // and crisp right-axis price labels
+            // Draw horizontal dashed price grid lines and crisp right-axis price labels
             val rowSpacingPx = gridSpanPx / (numHorizontalLines - 1).toFloat()
             for (row in -1..numHorizontalLines) {
                 val priceAtRow = topGridPrice - row * exactPriceStep
@@ -669,19 +1095,14 @@ fun CandlestickChart(
                 }
             }
 
-            // Draw candle-aligned vertical dashed time grid lines and bottom-axis timestamps:
-            // - ~10 to 11 vertical grid lines across chartWidth at every zoom level (matching MT5 square grid)
-            // - Bottom time labels appear on every 3rd vertical grid line (k % 3 == 0), giving ~3-4 time labels
-            val targetVertSpacingPx = chartWidth / 10.35f
-            val barStep = max(1, kotlin.math.round(targetVertSpacingPx / totalCandleSlot).toInt())
-            val minK = floor((idxAtLeftEdge - (n - 1).toFloat()) / barStep.toFloat()).toInt() - 1
-            val maxK = ceil((idxAtRightEdge - (n - 1).toFloat()) / barStep.toFloat()).toInt() + 1
+            // Draw 11 vertical dashed time grid lines (col = 0..10) and bottom-axis timestamps on col = 0, 3, 6, 9:
+            // As the user pinches 2 fingers together/apart (`zoomScale` / `totalCandleSlot`), the timestamps at
+            // col = 0, 3, 6, 9 dynamically zoom in and out just like in 876703870, 873921828, 866472779, 875028027, 869442267.
             val lastCandleTs = displayCandles.last().timestamp
             val firstCandleTs = displayCandles.first().timestamp
 
-            for (k in minK..maxK) {
-                val gridCandleIdx = (n - 1) + k * barStep
-                val x = candleOriginX - ((n - 1 - gridCandleIdx) * totalCandleSlot) + clampedPan
+            for (col in 0 until numVertGridCols) {
+                val x = firstVertGridX + col * vertGridSpacingPx
                 if (x < 1.dp.toPx() || x > chartWidth - 1.dp.toPx()) continue
 
                 drawLine(
@@ -692,7 +1113,10 @@ fun CandlestickChart(
                     pathEffect = gridDash
                 )
 
-                if (k % 3 == 0) {
+                if (col % 3 == 0) {
+                    val gridCandleIdx = kotlin.math.round(
+                        (n - 1).toFloat() - ((candleOriginX + clampedPan - x) / totalCandleSlot)
+                    ).toInt()
                     val tsAtGrid = when {
                         gridCandleIdx in 0 until n -> displayCandles[gridCandleIdx].timestamp
                         gridCandleIdx >= n && lastCandleTs > 0L -> lastCandleTs + (gridCandleIdx - (n - 1)).toLong() * tfIntervalMs
@@ -713,7 +1137,7 @@ fun CandlestickChart(
                         )
                     )
                     val centeredLeft = x - textLayout.size.width / 2f
-                    if (centeredLeft + textLayout.size.width > 4.dp.toPx() && centeredLeft < chartWidth - 4.dp.toPx()) {
+                    if (centeredLeft + textLayout.size.width > 2.dp.toPx() && centeredLeft < chartWidth - 2.dp.toPx()) {
                         clipRect(left = 0f, top = chartHeight, right = chartWidth, bottom = size.height) {
                             drawText(
                                 textLayoutResult = textLayout,
@@ -974,9 +1398,17 @@ fun CandlestickChart(
                 )
 
                 // Pass 1: Draw all dashed connector lines first so arrows always render cleanly on top
+                val activeEdit = editingTradeState
+                metrics.renderedHistoryMarkers.clear()
+
                 resolvedHistoryMarkers.forEach { marker ->
-                    val openIdx = marker.openCandleIdx
-                    val closeIdx = marker.closeCandleIdx
+                    val isBeingEdited = activeEdit != null && activeEdit.originalTrade.id == marker.trade.id
+                    val openIdx = if (isBeingEdited && activeEdit != null) activeEdit.openCandleIdx else marker.openCandleIdx
+                    val closeIdx = if (isBeingEdited && activeEdit != null) activeEdit.closeCandleIdx else marker.closeCandleIdx
+                    val openPriceVal = if (isBeingEdited && activeEdit != null) activeEdit.openPrice else marker.trade.openPrice
+                    val closePriceVal = if (isBeingEdited && activeEdit != null) activeEdit.closePrice else marker.trade.closePrice
+                    val isBuyVal = if (isBeingEdited && activeEdit != null) activeEdit.isBuy else marker.trade.isBuy
+
                     val openX = candleOriginX - ((n - 1 - openIdx) * totalCandleSlot) + clampedPan
                     val closeX = candleOriginX - ((n - 1 - closeIdx) * totalCandleSlot) + clampedPan
 
@@ -984,18 +1416,38 @@ fun CandlestickChart(
                     val maxX = max(openX, closeX)
                     if (maxX < -40.dp.toPx() || minX > chartWidth + 40.dp.toPx()) return@forEach
 
-                    val openY = priceToY(marker.trade.openPrice)
-                    val closeY = priceToY(marker.trade.closePrice)
+                    val openY = priceToY(openPriceVal)
+                    val closeY = priceToY(closePriceVal)
+                    val openBodyCenterY = if (isBuyVal) openY + totalH * 0.5f else openY - totalH * 0.5f
+                    val closeBodyCenterY = if (!isBuyVal) closeY + totalH * 0.5f else closeY - totalH * 0.5f
+
+                    metrics.renderedHistoryMarkers.add(
+                        RenderedHistoryMarker(
+                            trade = marker.trade,
+                            isBuy = isBuyVal,
+                            openCandleIdx = openIdx,
+                            closeCandleIdx = closeIdx,
+                            openPrice = openPriceVal,
+                            closePrice = closePriceVal,
+                            openTipX = openX,
+                            openTipY = openY,
+                            openBodyCenterY = openBodyCenterY,
+                            closeTipX = closeX,
+                            closeTipY = closeY,
+                            closeBodyCenterY = closeBodyCenterY
+                        )
+                    )
+
                     val dx = closeX - openX
                     val dy = closeY - openY
-                    val distPx = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                    val distPx = hypot(dx, dy)
 
                     if (distPx >= 1.5.dp.toPx()) {
                         drawLine(
-                            color = Color(0xFF5A7D95),
+                            color = if (isBeingEdited) Color(0xFF0D62C6) else Color(0xFF5A7D95),
                             start = Offset(openX, openY),
                             end = Offset(closeX, closeY),
-                            strokeWidth = connectorStrokeW,
+                            strokeWidth = if (isBeingEdited) connectorStrokeW * 1.45f else connectorStrokeW,
                             pathEffect = tradeConnectorDash
                         )
                     }
@@ -1003,7 +1455,11 @@ fun CandlestickChart(
 
                 // Pass 2: Draw Entry & Exit deal arrows on top of the dashed lines
                 val drawnArrowSpots = mutableListOf<Triple<Float, Float, Boolean>>()
-                fun drawDealArrowDeduplicated(tipX: Float, tipY: Float, isUpArrow: Boolean) {
+                fun drawDealArrowDeduplicated(tipX: Float, tipY: Float, isUpArrow: Boolean, forceDraw: Boolean = false) {
+                    if (forceDraw) {
+                        drawMt5DealArrow(tipX = tipX, tipY = tipY, isUpArrow = isUpArrow)
+                        return
+                    }
                     val duplicate = drawnArrowSpots.any { (x, y, up) ->
                         up == isUpArrow && abs(x - tipX) < 0.6.dp.toPx() && abs(y - tipY) < 0.6.dp.toPx()
                     }
@@ -1013,32 +1469,73 @@ fun CandlestickChart(
                     }
                 }
 
-                resolvedHistoryMarkers.forEach { marker ->
-                    val openIdx = marker.openCandleIdx
-                    val closeIdx = marker.closeCandleIdx
-                    val openX = candleOriginX - ((n - 1 - openIdx) * totalCandleSlot) + clampedPan
-                    val closeX = candleOriginX - ((n - 1 - closeIdx) * totalCandleSlot) + clampedPan
+                metrics.renderedHistoryMarkers.forEach { rm ->
+                    val isBeingEdited = activeEdit != null && activeEdit.originalTrade.id == rm.trade.id
 
-                    val minX = min(openX, closeX)
-                    val maxX = max(openX, closeX)
-                    if (maxX < -40.dp.toPx() || minX > chartWidth + 40.dp.toPx()) return@forEach
+                    if (isBeingEdited && activeEdit != null) {
+                        // Draw subtle horizontal price guide lines to right axis and selection halos around Entry & Exit arrows
+                        val guideDash = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx()), 0f)
+                        val openGuideColor = if (rm.isBuy) Color(0xFF0D62C6) else Color(0xFFD32F2F)
+                        val closeGuideColor = if (!rm.isBuy) Color(0xFF0D62C6) else Color(0xFFD32F2F)
 
-                    val openY = priceToY(marker.trade.openPrice)
-                    val closeY = priceToY(marker.trade.closePrice)
+                        drawLine(
+                            color = openGuideColor.copy(alpha = 0.65f),
+                            start = Offset(rm.openTipX, rm.openTipY),
+                            end = Offset(chartWidth, rm.openTipY),
+                            strokeWidth = 1.dp.toPx(),
+                            pathEffect = guideDash
+                        )
+                        drawLine(
+                            color = closeGuideColor.copy(alpha = 0.65f),
+                            start = Offset(rm.closeTipX, rm.closeTipY),
+                            end = Offset(chartWidth, rm.closeTipY),
+                            strokeWidth = 1.dp.toPx(),
+                            pathEffect = guideDash
+                        )
+
+                        val openActive = activeEdit.activeHandle == HistoryDragHandle.OPEN || activeEdit.activeHandle == HistoryDragHandle.BOTH
+                        val closeActive = activeEdit.activeHandle == HistoryDragHandle.CLOSE || activeEdit.activeHandle == HistoryDragHandle.BOTH
+
+                        drawCircle(
+                            color = openGuideColor.copy(alpha = if (openActive) 0.22f else 0.10f),
+                            radius = 12.dp.toPx(),
+                            center = Offset(rm.openTipX, rm.openBodyCenterY)
+                        )
+                        drawCircle(
+                            color = openGuideColor,
+                            radius = 12.dp.toPx(),
+                            center = Offset(rm.openTipX, rm.openBodyCenterY),
+                            style = Stroke(width = if (openActive) 1.6.dp.toPx() else 1.0.dp.toPx())
+                        )
+
+                        drawCircle(
+                            color = closeGuideColor.copy(alpha = if (closeActive) 0.22f else 0.10f),
+                            radius = 12.dp.toPx(),
+                            center = Offset(rm.closeTipX, rm.closeBodyCenterY)
+                        )
+                        drawCircle(
+                            color = closeGuideColor,
+                            radius = 12.dp.toPx(),
+                            center = Offset(rm.closeTipX, rm.closeBodyCenterY),
+                            style = Stroke(width = if (closeActive) 1.6.dp.toPx() else 1.0.dp.toPx())
+                        )
+                    }
 
                     // Entry deal arrow: BUY trade opens with Blue Up Arrow; SELL trade opens with Red Down Arrow
                     drawDealArrowDeduplicated(
-                        tipX = openX,
-                        tipY = openY,
-                        isUpArrow = marker.trade.isBuy
+                        tipX = rm.openTipX,
+                        tipY = rm.openTipY,
+                        isUpArrow = rm.isBuy,
+                        forceDraw = isBeingEdited
                     )
 
                     // Exit deal arrow: closing a BUY trade is a SELL deal (Red Down Arrow);
                     // closing a SELL trade is a BUY deal (Blue Up Arrow)
                     drawDealArrowDeduplicated(
-                        tipX = closeX,
-                        tipY = closeY,
-                        isUpArrow = !marker.trade.isBuy
+                        tipX = rm.closeTipX,
+                        tipY = rm.closeTipY,
+                        isUpArrow = !rm.isBuy,
+                        forceDraw = isBeingEdited
                     )
                 }
 
@@ -1396,6 +1893,261 @@ fun CandlestickChart(
                 color = primaryTextCol,
                 letterSpacing = 1.sp
             )
+        }
+
+        // =========================================================================
+        // Floating History Trade Move & Edit Control Bar
+        // Appears when the user long-presses ("obagena idapuwama") a history trade on the chart.
+        // Includes:
+        // - Live auto-calculated profit & moved candle prices
+        // - Handle selector (Entry / Exit / Both)
+        // - BUY / SELL order type change button right next to the Save button
+        // - Save button that auto-updates Trade History & Account Balance
+        // =========================================================================
+        editingTradeState?.let { editState ->
+            val liveProfit = remember(
+                editState.isBuy,
+                editState.openPrice,
+                editState.closePrice,
+                editState.originalTrade.lots,
+                quote.symbol
+            ) {
+                onCalculateHistoryProfit?.invoke(
+                    editState.isBuy,
+                    editState.originalTrade.lots,
+                    editState.openPrice,
+                    editState.closePrice
+                ) ?: run {
+                    val diff = if (editState.isBuy) {
+                        editState.closePrice - editState.openPrice
+                    } else {
+                        editState.openPrice - editState.closePrice
+                    }
+                    round(diff * editState.originalTrade.lots * 100.0 * 100.0) / 100.0
+                }
+            }
+
+            val openPriceFormatted = String.format(Locale.US, "%.${quote.digits}f", editState.openPrice)
+            val closePriceFormatted = String.format(Locale.US, "%.${quote.digits}f", editState.closePrice)
+            val profitFormatted = String.format(
+                Locale.US,
+                "%s%.2f USD",
+                if (liveProfit >= 0.0) "+" else "",
+                liveProfit
+            )
+            val profitColor = if (liveProfit >= 0.0) Color(0xFF0D62C6) else Color(0xFFD32F2F)
+            val orderSideColor = if (editState.isBuy) Color(0xFF0D62C6) else Color(0xFFD32F2F)
+
+            Surface(
+                color = Color(0xFFFDFDFE),
+                shape = RoundedCornerShape(12.dp),
+                shadowElevation = 6.dp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 8.dp, end = 62.dp, bottom = 28.dp)
+                    .fillMaxWidth()
+                    .border(
+                        width = 1.dp,
+                        color = Color(0xFFD0D7DE),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .testTag("chart_history_edit_bar")
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                ) {
+                    // Row 1: Trade Summary (Order Side + Lots, Open -> Close Prices, Live Auto-Calculated Profit, Cancel Button)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = "${if (editState.isBuy) "buy" else "sell"} ${String.format(Locale.US, "%.2f", editState.originalTrade.lots)}",
+                                fontFamily = MT5RobotoCondensedFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.5.sp,
+                                color = orderSideColor
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "$openPriceFormatted → $closePriceFormatted",
+                                fontFamily = MT5RobotoCondensedFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = Color(0xFF424548)
+                            )
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = profitFormatted,
+                                fontFamily = MT5RobotoCondensedFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.5.sp,
+                                color = profitColor
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFFF1F3F5))
+                                    .clickable { editingTradeState = null }
+                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                                    .testTag("chart_history_cancel_edit_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "✕",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF495057)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Row 2: Handle Selector (Entry / Exit / Both) + BUY/SELL Toggle Button right next to Save Button
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        // Left: Drag Handle Mode Pills
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            listOf(
+                                HistoryDragHandle.OPEN to "Entry",
+                                HistoryDragHandle.CLOSE to "Exit",
+                                HistoryDragHandle.BOTH to "Both"
+                            ).forEach { (handleMode, label) ->
+                                val selected = editState.activeHandle == handleMode
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(
+                                            if (selected) Color(0xFFE7F1FF) else Color(0xFFF1F3F5)
+                                        )
+                                        .border(
+                                            width = 0.8.dp,
+                                            color = if (selected) Color(0xFF0D62C6) else Color(0xFFDADCE0),
+                                            shape = RoundedCornerShape(6.dp)
+                                        )
+                                        .clickable {
+                                            editingTradeState = editState.copy(activeHandle = handleMode)
+                                        }
+                                        .padding(horizontal = 7.dp, vertical = 5.dp)
+                                        .testTag("chart_history_handle_${label.lowercase(Locale.US)}"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (selected) Color(0xFF0D62C6) else Color(0xFF495057)
+                                    )
+                                }
+                            }
+                        }
+
+                        // Right: Order Type BUY / SELL Change Button right next to Save Button
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            // BUY / SELL Toggle Button right next to Save button
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(7.dp))
+                                    .background(orderSideColor)
+                                    .clickable {
+                                        localView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                        editingTradeState = editState.copy(isBuy = !editState.isBuy)
+                                    }
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    .testTag("chart_history_toggle_buy_sell_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = if (editState.isBuy) "⇄ BUY" else "⇄ SELL",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+
+                            // Save Button
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(7.dp))
+                                    .background(Color(0xFF198754))
+                                    .clickable {
+                                        val curCandles = displayCandles
+                                        if (curCandles.isNotEmpty()) {
+                                            val safeOpenIdx = editState.openCandleIdx.coerceIn(0, curCandles.lastIndex)
+                                            val safeCloseIdx = editState.closeCandleIdx.coerceIn(safeOpenIdx, curCandles.lastIndex)
+                                            val finalOpenPrice = clampPriceStrictlyInsideCandle(editState.openPrice, safeOpenIdx, curCandles)
+                                            val finalClosePrice = clampPriceStrictlyInsideCandle(editState.closePrice, safeCloseIdx, curCandles)
+
+                                            val origOpenMs = com.example.data.SriLankaMarketHours.parseMt5DateTimeMillis(editState.originalTrade.openTime)
+                                            val origCloseMs = com.example.data.SriLankaMarketHours.parseMt5DateTimeMillis(editState.originalTrade.closeTime)
+                                            val openSec = if (origOpenMs > 0L) (origOpenMs / 1000L % 60L).coerceIn(2L, 55L) else 12L
+                                            val closeSec = if (origCloseMs > 0L) (origCloseMs / 1000L % 60L).coerceIn(2L, 58L) else 44L
+
+                                            val openCandleBaseMs = (curCandles[safeOpenIdx].timestamp / 60_000L) * 60_000L
+                                            val closeCandleBaseMs = (curCandles[safeCloseIdx].timestamp / 60_000L) * 60_000L
+
+                                            val newOpenMs: Long
+                                            val newCloseMs: Long
+                                            if (closeCandleBaseMs <= openCandleBaseMs) {
+                                                val s1 = min(openSec, 22L)
+                                                val s2 = max(closeSec, s1 + 18L).coerceAtMost(58L)
+                                                newOpenMs = openCandleBaseMs + s1 * 1000L
+                                                newCloseMs = openCandleBaseMs + s2 * 1000L
+                                            } else {
+                                                newOpenMs = openCandleBaseMs + openSec * 1000L
+                                                newCloseMs = closeCandleBaseMs + closeSec * 1000L
+                                            }
+
+                                            val newOpenTimeStr = com.example.data.SriLankaMarketHours.formatHistoryTimestamp(newOpenMs)
+                                            val newCloseTimeStr = com.example.data.SriLankaMarketHours.formatHistoryTimestamp(newCloseMs)
+
+                                            onSaveHistoryTradeEdit?.invoke(
+                                                editState.originalTrade,
+                                                editState.isBuy,
+                                                finalOpenPrice,
+                                                finalClosePrice,
+                                                newOpenTimeStr,
+                                                newCloseTimeStr
+                                            )
+                                        }
+                                        editingTradeState = null
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    .testTag("chart_history_save_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "Save",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

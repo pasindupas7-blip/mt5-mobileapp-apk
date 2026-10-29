@@ -83,6 +83,7 @@ fun SettingsScreen(
     val account by viewModel.account.collectAsState()
     val isCloudSynced by viewModel.isCloudSynced.collectAsState()
     val currentUserEmail by viewModel.currentUserEmail.collectAsState()
+    val chartHistoryMoveEnabled by viewModel.chartHistoryMoveEnabled.collectAsState()
     var showEditAccountDialog by remember { mutableStateOf(false) }
 
     if (showEditAccountDialog) {
@@ -244,6 +245,72 @@ fun SettingsScreen(
                     subtitle = "Save & restore open trades and trade history on Firebase server",
                     onClick = { viewModel.signInWithGoogle(context) }
                 )
+            }
+
+            HorizontalDivider(thickness = 0.5.dp, color = MT5Separator, modifier = Modifier.padding(start = 52.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { viewModel.toggleChartHistoryMove() }
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .testTag("settings_chart_history_move_toggle_row"),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (chartHistoryMoveEnabled) MT5Green else Color(0xFF8E8E93)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Chart Trade History Move",
+                        tint = Color.White,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Chart Trade History Move",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MT5TextPrimary
+                    )
+                    Text(
+                        text = if (chartHistoryMoveEnabled) {
+                            "ON • Long-press trade on chart to move & edit"
+                        } else {
+                            "OFF • Chart trade history move is disabled"
+                        },
+                        fontSize = 12.sp,
+                        color = MT5TextSecondary,
+                        maxLines = 1,
+                        modifier = Modifier.padding(top = 1.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Surface(
+                    color = if (chartHistoryMoveEnabled) Color(0xFF198754) else Color(0xFF6C757D),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .clickable { viewModel.toggleChartHistoryMove() }
+                        .testTag("settings_chart_history_move_button")
+                ) {
+                    Text(
+                        text = if (chartHistoryMoveEnabled) "ON" else "OFF",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    )
+                }
             }
         }
 
