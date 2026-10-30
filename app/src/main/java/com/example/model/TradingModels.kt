@@ -100,7 +100,9 @@ data class AccountInfo(
     val realizedProfit: Double = 24.74,
     val totalWithdrawal: Double = 0.00,
     val totalSwap: Double = 0.00,
-    val totalCommission: Double = 0.00
+    val totalCommission: Double = 0.00,
+    val key: String = "main",
+    val logoType: String = "AUTO"
 )
 
 enum class MarketConnectionStatus {

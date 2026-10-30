@@ -21,7 +21,7 @@ class LocalTradeStorage(context: Context) {
         prefs.edit().putBoolean(KEY_SEEDED_DEFAULT_HISTORY, seeded).apply()
     }
 
-    fun savePositions(positions: List<TradePosition>) {
+    private fun encodePositionsJson(positions: List<TradePosition>): String {
         val arr = JSONArray()
         for (p in positions) {
             val obj = JSONObject().apply {
@@ -38,11 +38,11 @@ class LocalTradeStorage(context: Context) {
             }
             arr.put(obj)
         }
-        prefs.edit().putString(KEY_POSITIONS, arr.toString()).apply()
+        return arr.toString()
     }
 
-    fun loadPositions(): List<TradePosition> {
-        val raw = prefs.getString(KEY_POSITIONS, null) ?: return emptyList()
+    private fun decodePositionsJson(raw: String?): List<TradePosition> {
+        if (raw.isNullOrBlank()) return emptyList()
         return try {
             val arr = JSONArray(raw)
             val list = mutableListOf<TradePosition>()
@@ -71,7 +71,34 @@ class LocalTradeStorage(context: Context) {
         }
     }
 
-    fun saveHistory(history: List<HistoryTrade>) {
+    fun savePositions(positions: List<TradePosition>) {
+        prefs.edit().putString(KEY_POSITIONS, encodePositionsJson(positions)).apply()
+    }
+
+    fun loadPositions(): List<TradePosition> {
+        return decodePositionsJson(prefs.getString(KEY_POSITIONS, null))
+    }
+
+    fun savePositionsForAccount(accountKey: String, positions: List<TradePosition>) {
+        val safeKey = accountKey.ifBlank { "main" }
+        val json = encodePositionsJson(positions)
+        val editor = prefs.edit().putString("${KEY_POSITIONS}_$safeKey", json)
+        if (safeKey == "main") {
+            editor.putString(KEY_POSITIONS, json)
+        }
+        editor.apply()
+    }
+
+    fun loadPositionsForAccount(accountKey: String): List<TradePosition> {
+        val safeKey = accountKey.ifBlank { "main" }
+        val raw = prefs.getString("${KEY_POSITIONS}_$safeKey", null)
+        if (raw != null) {
+            return decodePositionsJson(raw)
+        }
+        return if (safeKey == "main") loadPositions() else emptyList()
+    }
+
+    private fun encodeHistoryJson(history: List<HistoryTrade>): String {
         val arr = JSONArray()
         for (h in history) {
             val obj = JSONObject().apply {
@@ -95,11 +122,11 @@ class LocalTradeStorage(context: Context) {
             }
             arr.put(obj)
         }
-        prefs.edit().putString(KEY_HISTORY, arr.toString()).apply()
+        return arr.toString()
     }
 
-    fun loadHistory(): List<HistoryTrade> {
-        val raw = prefs.getString(KEY_HISTORY, null) ?: return emptyList()
+    private fun decodeHistoryJson(raw: String?): List<HistoryTrade> {
+        if (raw.isNullOrBlank()) return emptyList()
         return try {
             val arr = JSONArray(raw)
             val list = mutableListOf<HistoryTrade>()
@@ -142,8 +169,36 @@ class LocalTradeStorage(context: Context) {
         }
     }
 
-    fun saveAccount(account: AccountInfo) {
-        val obj = JSONObject().apply {
+    fun saveHistory(history: List<HistoryTrade>) {
+        prefs.edit().putString(KEY_HISTORY, encodeHistoryJson(history)).apply()
+    }
+
+    fun loadHistory(): List<HistoryTrade> {
+        return decodeHistoryJson(prefs.getString(KEY_HISTORY, null))
+    }
+
+    fun saveHistoryForAccount(accountKey: String, history: List<HistoryTrade>) {
+        val safeKey = accountKey.ifBlank { "main" }
+        val json = encodeHistoryJson(history)
+        val editor = prefs.edit().putString("${KEY_HISTORY}_$safeKey", json)
+        if (safeKey == "main") {
+            editor.putString(KEY_HISTORY, json)
+        }
+        editor.apply()
+    }
+
+    fun loadHistoryForAccount(accountKey: String): List<HistoryTrade> {
+        val safeKey = accountKey.ifBlank { "main" }
+        val raw = prefs.getString("${KEY_HISTORY}_$safeKey", null)
+        if (raw != null) {
+            return decodeHistoryJson(raw)
+        }
+        return if (safeKey == "main") loadHistory() else emptyList()
+    }
+
+    private fun accountToJsonObject(account: AccountInfo): JSONObject {
+        return JSONObject().apply {
+            put("key", account.key.ifBlank { "main" })
             put("balance", account.balance)
             put("equity", account.equity)
             put("margin", account.margin)
@@ -160,52 +215,108 @@ class LocalTradeStorage(context: Context) {
             put("totalWithdrawal", account.totalWithdrawal)
             put("totalSwap", account.totalSwap)
             put("totalCommission", account.totalCommission)
+            put("logoType", account.logoType.ifBlank { "AUTO" })
         }
-        prefs.edit().putString(KEY_ACCOUNT, obj.toString()).apply()
+    }
+
+    private fun jsonObjectToAccount(obj: JSONObject, isLegacySingleAccount: Boolean = false): AccountInfo {
+        val defaults = AccountInfo()
+        val key = obj.optString("key", "main").ifBlank { "main" }
+        val savedName = obj.optString("accountName", defaults.accountName)
+        val savedBroker = obj.optString("brokerName", defaults.brokerName)
+        val savedId = obj.optString("accountId", defaults.accountId)
+        val savedServer = obj.optString("serverName", defaults.serverName)
+        val savedLogoType = obj.optString("logoType", "AUTO").ifBlank { "AUTO" }
+
+        val isLegacyDefault = isLegacySingleAccount && key == "main" && (
+            savedName == "REAL 21" ||
+                savedName == "Pasindu Jeewantha Pelan..."
+            )
+        val rawDeposit = obj.optDouble("deposit", if (key == "main") defaults.deposit else 0.0)
+        val effectiveDeposit = if (isLegacySingleAccount && rawDeposit == 674.08) 500.00 else rawDeposit.coerceAtLeast(0.0)
+        val rawProfit = obj.optDouble("realizedProfit", if (key == "main") defaults.realizedProfit else 0.0)
+        val effectiveProfit = if (isLegacySingleAccount && rawProfit == -139.83) defaults.realizedProfit else rawProfit
+        val effectiveWithdrawal = obj.optDouble("totalWithdrawal", 0.00)
+        val effectiveBalance = kotlin.math.round((effectiveDeposit + effectiveProfit - effectiveWithdrawal) * 100.0) / 100.0
+
+        return AccountInfo(
+            balance = effectiveBalance,
+            equity = obj.optDouble("equity", effectiveBalance),
+            margin = obj.optDouble("margin", 0.00),
+            freeMargin = obj.optDouble("freeMargin", effectiveBalance),
+            marginLevel = obj.optDouble("marginLevel", 0.00),
+            floatingPnL = obj.optDouble("floatingPnL", 0.00),
+            accountName = if (isLegacyDefault) defaults.accountName else savedName,
+            brokerName = if (isLegacyDefault) defaults.brokerName else savedBroker,
+            accountId = if (isLegacyDefault) defaults.accountId else savedId,
+            serverName = if (isLegacyDefault) defaults.serverName else savedServer,
+            isReal = obj.optBoolean("isReal", defaults.isReal),
+            deposit = effectiveDeposit,
+            realizedProfit = effectiveProfit,
+            totalWithdrawal = effectiveWithdrawal,
+            totalSwap = 0.00,
+            totalCommission = 0.00,
+            key = key,
+            logoType = savedLogoType
+        )
+    }
+
+    fun saveAccount(account: AccountInfo) {
+        prefs.edit().putString(KEY_ACCOUNT, accountToJsonObject(account).toString()).apply()
     }
 
     fun loadAccount(): AccountInfo? {
         val raw = prefs.getString(KEY_ACCOUNT, null) ?: return null
         return try {
             val obj = JSONObject(raw)
-            val defaults = AccountInfo()
-            val savedName = obj.optString("accountName", defaults.accountName)
-            val savedBroker = obj.optString("brokerName", defaults.brokerName)
-            val savedId = obj.optString("accountId", defaults.accountId)
-            val savedServer = obj.optString("serverName", defaults.serverName)
-
-            val isLegacyDefault = savedName == "REAL 21" ||
-                savedBroker.contains("Fusion Markets") ||
-                savedId.startsWith("420784") ||
-                savedName == "Pasindu Jeewantha Pelan..."
-            val rawDeposit = obj.optDouble("deposit", defaults.deposit)
-            val effectiveDeposit = if (rawDeposit == 674.08 || rawDeposit <= 0.0) 500.00 else rawDeposit
-            val rawProfit = obj.optDouble("realizedProfit", defaults.realizedProfit)
-            val effectiveProfit = if (rawProfit == -139.83) defaults.realizedProfit else rawProfit
-            val effectiveWithdrawal = obj.optDouble("totalWithdrawal", 0.00)
-            val effectiveBalance = kotlin.math.round((effectiveDeposit + effectiveProfit - effectiveWithdrawal) * 100.0) / 100.0
-
-            AccountInfo(
-                balance = effectiveBalance,
-                equity = obj.optDouble("equity", effectiveBalance),
-                margin = obj.optDouble("margin", 0.00),
-                freeMargin = obj.optDouble("freeMargin", effectiveBalance),
-                marginLevel = obj.optDouble("marginLevel", 0.00),
-                floatingPnL = obj.optDouble("floatingPnL", 0.00),
-                accountName = if (isLegacyDefault) defaults.accountName else savedName,
-                brokerName = if (isLegacyDefault) defaults.brokerName else savedBroker,
-                accountId = if (isLegacyDefault) defaults.accountId else savedId,
-                serverName = if (isLegacyDefault) defaults.serverName else savedServer,
-                isReal = obj.optBoolean("isReal", defaults.isReal),
-                deposit = effectiveDeposit,
-                realizedProfit = effectiveProfit,
-                totalWithdrawal = effectiveWithdrawal,
-                totalSwap = 0.00,
-                totalCommission = 0.00
-            )
+            jsonObjectToAccount(obj, isLegacySingleAccount = true)
         } catch (e: Exception) {
             null
         }
+    }
+
+    fun saveAccountsList(accounts: List<AccountInfo>) {
+        val arr = JSONArray()
+        for (acc in accounts) {
+            arr.put(accountToJsonObject(acc))
+        }
+        prefs.edit().putString(KEY_ACCOUNTS_LIST, arr.toString()).apply()
+    }
+
+    fun loadAccountsList(): List<AccountInfo> {
+        val raw = prefs.getString(KEY_ACCOUNTS_LIST, null)
+        if (!raw.isNullOrBlank()) {
+            try {
+                val arr = JSONArray(raw)
+                val list = mutableListOf<AccountInfo>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    list.add(jsonObjectToAccount(obj, isLegacySingleAccount = false))
+                }
+                if (list.isNotEmpty()) {
+                    return list
+                }
+            } catch (ignored: Exception) {
+            }
+        }
+        val legacyMain = loadAccount()
+        return if (legacyMain != null) listOf(legacyMain) else emptyList()
+    }
+
+    fun saveActiveAccountKey(accountKey: String) {
+        prefs.edit().putString(KEY_ACTIVE_ACCOUNT_KEY, accountKey.ifBlank { "main" }).apply()
+    }
+
+    fun loadActiveAccountKey(): String {
+        return prefs.getString(KEY_ACTIVE_ACCOUNT_KEY, "main")?.ifBlank { "main" } ?: "main"
+    }
+
+    fun deleteAccountStorage(accountKey: String) {
+        val safeKey = accountKey.ifBlank { "main" }
+        prefs.edit()
+            .remove("${KEY_POSITIONS}_$safeKey")
+            .remove("${KEY_HISTORY}_$safeKey")
+            .apply()
     }
 
     fun saveNextPositionId(nextId: Long) {
@@ -285,6 +396,8 @@ class LocalTradeStorage(context: Context) {
         private const val KEY_POSITIONS = "open_positions_json"
         private const val KEY_HISTORY = "trade_history_json"
         private const val KEY_ACCOUNT = "account_info_json"
+        private const val KEY_ACCOUNTS_LIST = "accounts_list_json_v1"
+        private const val KEY_ACTIVE_ACCOUNT_KEY = "active_account_key_v1"
         private const val KEY_NEXT_ID = "next_position_id"
         private const val KEY_SEEDED_DEFAULT_HISTORY = "seeded_default_history_v1"
         private const val KEY_CANDLES_PREFIX = "chart_candles_real_v6_"

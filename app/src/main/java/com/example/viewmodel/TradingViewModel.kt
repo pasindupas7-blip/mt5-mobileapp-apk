@@ -50,6 +50,7 @@ class TradingViewModel @JvmOverloads constructor(
     val positions: StateFlow<List<TradePosition>> = repository.positions
     val history: StateFlow<List<HistoryTrade>> = repository.history
     val account: StateFlow<AccountInfo> = repository.account
+    val accounts: StateFlow<List<AccountInfo>> = repository.accounts
     val candles: StateFlow<List<Candle>> = repository.selectedPairCandles
     val marketConnectionStatus: StateFlow<MarketConnectionStatus> = repository.marketConnectionStatus
     val fastForexLastSync: StateFlow<Long> = repository.fastForexService.lastSyncTimestamp
@@ -503,16 +504,82 @@ class TradingViewModel @JvmOverloads constructor(
         accountName: String,
         brokerName: String? = null,
         accountId: String? = null,
-        serverName: String? = null
+        serverName: String? = null,
+        isReal: Boolean? = null,
+        newBalance: Double? = null,
+        logoType: String? = null
     ) {
         val current = repository.account.value
         repository.updateAccountDetails(
             accountName = accountName,
             brokerName = brokerName ?: current.brokerName,
             accountId = accountId ?: current.accountId,
-            serverName = serverName ?: current.serverName
+            serverName = serverName ?: current.serverName,
+            isReal = isReal,
+            newBalance = newBalance,
+            logoType = logoType
         )
         showNotification("Account updated: $accountName")
+    }
+
+    fun addAccount(
+        accountName: String,
+        brokerName: String,
+        accountId: String,
+        serverName: String,
+        isReal: Boolean,
+        initialBalance: Double,
+        logoType: String = "AUTO",
+        switchToNew: Boolean = true
+    ) {
+        val created = repository.addAccount(
+            accountName = accountName,
+            brokerName = brokerName,
+            accountId = accountId,
+            serverName = serverName,
+            isReal = isReal,
+            initialBalance = initialBalance,
+            logoType = logoType,
+            switchToNew = switchToNew
+        )
+        showNotification("Account added: ${created.accountName}")
+    }
+
+    fun switchAccount(accountKey: String) {
+        repository.switchAccount(accountKey)
+        val active = repository.account.value
+        showNotification("Switched to ${active.accountName}")
+    }
+
+    fun updateAccountByKey(
+        targetKey: String,
+        accountName: String,
+        brokerName: String,
+        accountId: String,
+        serverName: String,
+        isReal: Boolean? = null,
+        newBalance: Double? = null,
+        logoType: String? = null
+    ) {
+        repository.updateAccountByKey(
+            targetKey = targetKey,
+            accountName = accountName,
+            brokerName = brokerName,
+            accountId = accountId,
+            serverName = serverName,
+            isReal = isReal,
+            newBalance = newBalance,
+            logoType = logoType
+        )
+        showNotification("Account saved: $accountName")
+    }
+
+    fun deleteAccount(targetKey: String) {
+        val targetName = repository.accounts.value.find { it.key == targetKey }?.accountName ?: "Account"
+        val deleted = repository.deleteAccount(targetKey)
+        if (deleted) {
+            showNotification("Deleted account: $targetName")
+        }
     }
 
     fun topUpBalance(amount: Double) {

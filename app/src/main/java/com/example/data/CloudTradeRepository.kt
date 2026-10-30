@@ -177,7 +177,8 @@ data class AccountDoc(
         deposit = deposit,
         realizedProfit = realizedProfit,
         totalSwap = totalSwap,
-        totalCommission = totalCommission
+        totalCommission = totalCommission,
+        key = id.ifBlank { "main" }
     )
 }
 
@@ -196,7 +197,33 @@ class CloudTradeRepository(
             ?: throw IllegalStateException("User must be signed in with Google before accessing Firestore.")
     }
 
-    fun observeOpenPositions(userId: String = requireUserId()): Flow<List<TradePosition>> = callbackFlow {
+    private fun extractAccountKeyFromDocId(docId: String, prefix: String): String {
+        val body = docId.removePrefix("${prefix}_")
+        if (body.startsWith("acc_")) {
+            val parts = body.split("_")
+            if (parts.size >= 2) {
+                return "${parts[0]}_${parts[1]}"
+            }
+        }
+        return "main"
+    }
+
+    private fun positionDocId(positionId: Long, accountKey: String): String {
+        val safeKey = accountKey.ifBlank { "main" }
+        return if (safeKey == "main") "pos_$positionId" else "pos_${safeKey}_$positionId"
+    }
+
+    private fun historyDocId(tradeId: Long, docSuffix: String, accountKey: String): String {
+        val safeKey = accountKey.ifBlank { "main" }
+        val base = if (safeKey == "main") "hist_$tradeId" else "hist_${safeKey}_$tradeId"
+        return if (docSuffix.isNotBlank()) "${base}_$docSuffix" else base
+    }
+
+    fun observeOpenPositions(
+        userId: String = requireUserId(),
+        accountKey: String = "main"
+    ): Flow<List<TradePosition>> = callbackFlow {
+        val safeKey = accountKey.ifBlank { "main" }
         val path = "users/$userId/positions"
         val registration = db.collection("users").document(userId).collection("positions")
             .whereEqualTo("userId", userId)
@@ -210,7 +237,8 @@ class CloudTradeRepository(
                     val items = snapshot.toObjects(
                         TradePositionDoc::class.java,
                         DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    ).sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
+                    ).filter { extractAccountKeyFromDocId(it.id, "pos") == safeKey }
+                        .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
                         .map { it.toDomain() }
                     trySend(items)
                 }
@@ -218,7 +246,11 @@ class CloudTradeRepository(
         awaitClose { registration.remove() }
     }
 
-    fun observeTradeHistory(userId: String = requireUserId()): Flow<List<HistoryTrade>> = callbackFlow {
+    fun observeTradeHistory(
+        userId: String = requireUserId(),
+        accountKey: String = "main"
+    ): Flow<List<HistoryTrade>> = callbackFlow {
+        val safeKey = accountKey.ifBlank { "main" }
         val path = "users/$userId/history"
         val registration = db.collection("users").document(userId).collection("history")
             .whereEqualTo("userId", userId)
@@ -232,7 +264,8 @@ class CloudTradeRepository(
                     val items = snapshot.toObjects(
                         HistoryTradeDoc::class.java,
                         DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    ).map { it.toDomain() }
+                    ).filter { extractAccountKeyFromDocId(it.id, "hist") == safeKey }
+                        .map { it.toDomain() }
                         .sortedWith(
                             compareBy<HistoryTrade> {
                                 SriLankaMarketHours.parseMt5DateTimeMillis(it.closeTime)
@@ -244,9 +277,13 @@ class CloudTradeRepository(
         awaitClose { registration.remove() }
     }
 
-    fun observeAccountDoc(userId: String = requireUserId()): Flow<AccountDoc?> = callbackFlow {
-        val path = "users/$userId/accounts/main"
-        val registration = db.collection("users").document(userId).collection("accounts").document("main")
+    fun observeAccountDoc(
+        userId: String = requireUserId(),
+        accountKey: String = "main"
+    ): Flow<AccountDoc?> = callbackFlow {
+        val safeKey = accountKey.ifBlank { "main" }
+        val path = "users/$userId/accounts/$safeKey"
+        val registration = db.collection("users").document(userId).collection("accounts").document(safeKey)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     handleFirestoreError(error, OperationType.GET, path)
@@ -267,8 +304,33 @@ class CloudTradeRepository(
         awaitClose { registration.remove() }
     }
 
-    suspend fun saveOpenPosition(position: TradePosition, userId: String = requireUserId()): String {
-        val docId = "pos_${position.id}"
+    fun observeAllAccountDocs(userId: String = requireUserId()): Flow<List<AccountDoc>> = callbackFlow {
+        val path = "users/$userId/accounts"
+        val registration = db.collection("users").document(userId).collection("accounts")
+            .whereEqualTo("userId", userId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    handleFirestoreError(error, OperationType.LIST, path)
+                    close(error)
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val docs = snapshot.toObjects(
+                        AccountDoc::class.java,
+                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                    )
+                    trySend(docs)
+                }
+            }
+        awaitClose { registration.remove() }
+    }
+
+    suspend fun saveOpenPosition(
+        position: TradePosition,
+        userId: String = requireUserId(),
+        accountKey: String = "main"
+    ): String {
+        val docId = positionDocId(position.id, accountKey)
         val docRef = db.collection("users").document(userId).collection("positions").document(docId)
         val payload = mutableMapOf<String, Any>(
             "userId" to userId,
@@ -306,9 +368,10 @@ class CloudTradeRepository(
         newLots: Double,
         currentPrice: Double,
         newProfit: Double,
-        userId: String = requireUserId()
+        userId: String = requireUserId(),
+        accountKey: String = "main"
     ) {
-        val docId = "pos_$positionId"
+        val docId = positionDocId(positionId, accountKey)
         val docRef = db.collection("users").document(userId).collection("positions").document(docId)
         val updates = mapOf(
             "lots" to newLots.coerceIn(0.01, 1000.0),
@@ -326,8 +389,12 @@ class CloudTradeRepository(
         }
     }
 
-    suspend fun deleteOpenPosition(positionId: Long, userId: String = requireUserId()) {
-        val docId = "pos_$positionId"
+    suspend fun deleteOpenPosition(
+        positionId: Long,
+        userId: String = requireUserId(),
+        accountKey: String = "main"
+    ) {
+        val docId = positionDocId(positionId, accountKey)
         val docRef = db.collection("users").document(userId).collection("positions").document(docId)
         try {
             docRef.delete().await()
@@ -401,8 +468,13 @@ class CloudTradeRepository(
         )
     }
 
-    suspend fun addHistoryTrade(trade: HistoryTrade, docSuffix: String = "", userId: String = requireUserId()): String {
-        val docId = if (docSuffix.isNotBlank()) "hist_${trade.id}_$docSuffix" else "hist_${trade.id}"
+    suspend fun addHistoryTrade(
+        trade: HistoryTrade,
+        docSuffix: String = "",
+        userId: String = requireUserId(),
+        accountKey: String = "main"
+    ): String {
+        val docId = historyDocId(trade.id, docSuffix, accountKey)
         val docRef = db.collection("users").document(userId).collection("history").document(docId)
         val payload = buildHistoryPayload(trade, userId)
         try {
@@ -421,9 +493,14 @@ class CloudTradeRepository(
         }
     }
 
-    suspend fun deleteHistoryTrade(tradeId: Long, userId: String = requireUserId()) {
+    suspend fun deleteHistoryTrade(
+        tradeId: Long,
+        userId: String = requireUserId(),
+        accountKey: String = "main"
+    ) {
+        val safeKey = accountKey.ifBlank { "main" }
         val colRef = db.collection("users").document(userId).collection("history")
-        val primaryDocRef = colRef.document("hist_$tradeId")
+        val primaryDocRef = colRef.document(historyDocId(tradeId, "", safeKey))
         try {
             primaryDocRef.delete().await()
             val matchingDocs = colRef
@@ -432,7 +509,9 @@ class CloudTradeRepository(
                 .get()
                 .await()
             for (doc in matchingDocs.documents) {
-                doc.reference.delete().await()
+                if (extractAccountKeyFromDocId(doc.id, "hist") == safeKey) {
+                    doc.reference.delete().await()
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -457,8 +536,13 @@ class CloudTradeRepository(
         }
     }
 
-    suspend fun saveOrUpdateAccount(account: AccountInfo, userId: String = requireUserId()) {
-        val docRef = db.collection("users").document(userId).collection("accounts").document("main")
+    suspend fun saveOrUpdateAccount(
+        account: AccountInfo,
+        userId: String = requireUserId(),
+        accountKey: String = account.key.ifBlank { "main" }
+    ) {
+        val safeKey = accountKey.ifBlank { "main" }
+        val docRef = db.collection("users").document(userId).collection("accounts").document(safeKey)
         try {
             val existing = docRef.get().await()
             if (!existing.exists()) {
@@ -502,12 +586,34 @@ class CloudTradeRepository(
         }
     }
 
-    suspend fun clearUserPositions(userId: String = requireUserId()) {
+    suspend fun deleteAccountAndData(
+        accountKey: String,
+        userId: String = requireUserId()
+    ) {
+        val safeKey = accountKey.ifBlank { "main" }
+        val accRef = db.collection("users").document(userId).collection("accounts").document(safeKey)
+        try {
+            accRef.delete().await()
+            clearUserPositions(userId, safeKey)
+            clearUserHistory(userId, safeKey)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleFirestoreError(e, OperationType.DELETE, accRef.path)
+        }
+    }
+
+    suspend fun clearUserPositions(
+        userId: String = requireUserId(),
+        accountKey: String? = null
+    ) {
         val colRef = db.collection("users").document(userId).collection("positions")
         try {
             val snap = colRef.whereEqualTo("userId", userId).get().await()
             for (doc in snap.documents) {
-                doc.reference.delete().await()
+                if (accountKey == null || extractAccountKeyFromDocId(doc.id, "pos") == accountKey) {
+                    doc.reference.delete().await()
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -516,12 +622,17 @@ class CloudTradeRepository(
         }
     }
 
-    suspend fun clearUserHistory(userId: String = requireUserId()) {
+    suspend fun clearUserHistory(
+        userId: String = requireUserId(),
+        accountKey: String? = null
+    ) {
         val colRef = db.collection("users").document(userId).collection("history")
         try {
             val snap = colRef.whereEqualTo("userId", userId).get().await()
             for (doc in snap.documents) {
-                doc.reference.delete().await()
+                if (accountKey == null || extractAccountKeyFromDocId(doc.id, "hist") == accountKey) {
+                    doc.reference.delete().await()
+                }
             }
         } catch (e: CancellationException) {
             throw e

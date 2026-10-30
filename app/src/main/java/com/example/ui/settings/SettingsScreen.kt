@@ -87,12 +87,24 @@ fun SettingsScreen(
     var showEditAccountDialog by remember { mutableStateOf(false) }
 
     if (showEditAccountDialog) {
-        EditAccountDialog(
-            currentAccount = account,
+        com.example.ui.accounts.AddOrEditAccountDialog(
+            initialAccount = account,
             onDismiss = { showEditAccountDialog = false },
-            onSave = { name, broker, id, server ->
-                viewModel.updateAccountDetails(name, broker, id, server)
+            onSave = { name, broker, id, server, isReal, balance, logoType ->
+                viewModel.updateAccountDetails(
+                    accountName = name,
+                    brokerName = broker,
+                    accountId = id,
+                    serverName = server,
+                    isReal = isReal,
+                    newBalance = balance,
+                    logoType = logoType
+                )
                 showEditAccountDialog = false
+            },
+            onDelete = {
+                showEditAccountDialog = false
+                viewModel.deleteAccount(account.key)
             }
         )
     }

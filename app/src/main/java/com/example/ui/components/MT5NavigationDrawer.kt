@@ -177,8 +177,9 @@ fun MT5NavigationDrawerOverlay(
                         .padding(start = 18.dp, end = 16.dp, top = 16.dp, bottom = 14.dp),
                     verticalAlignment = Alignment.Top
                 ) {
-                    // Red segmented ring logo icon matching Screenshot 1
-                    MT5RedRingLogo(
+                    // Broker logo icon matching active account
+                    MT5AccountBrokerLogo(
+                        account = account,
                         modifier = Modifier
                             .padding(top = 2.dp)
                             .size(36.dp)
@@ -191,10 +192,10 @@ fun MT5NavigationDrawerOverlay(
                     } else {
                         account.accountName
                     }
-                    val drawerDisplayId = if (account.accountId.startsWith("36054607")) {
-                        "36054607 - MonetaMarkets..."
-                    } else {
-                        account.accountId
+                    val drawerDisplayId = when {
+                        account.accountId.startsWith("36054607") -> "36054607 - MonetaMarkets..."
+                        account.accountId.startsWith("1066312") -> "1066312 - MonetaMarkets-..."
+                        else -> account.accountId.replace("\u2014", "-")
                     }
 
                     Column(modifier = Modifier.weight(1f)) {
@@ -313,6 +314,28 @@ fun MT5NavigationDrawerOverlay(
 }
 
 @Composable
+fun MT5AccountBrokerLogo(
+    account: AccountInfo,
+    modifier: Modifier = Modifier
+) {
+    val combined = "${account.logoType} ${account.brokerName} ${account.accountId} ${account.accountName}".lowercase()
+    when {
+        account.logoType.equals("FUNDINGPIPS", ignoreCase = true) ||
+            combined.contains("fundingpips") ||
+            combined.contains("pasindu+j") -> {
+            MT5FundingPipsLogo(modifier = modifier)
+        }
+        account.logoType.equals("FUSION", ignoreCase = true) ||
+            combined.contains("fusion") -> {
+            MT5FusionMarketsLogo(modifier = modifier)
+        }
+        else -> {
+            MT5RedRingLogo(modifier = modifier)
+        }
+    }
+}
+
+@Composable
 fun MT5RedRingLogo(modifier: Modifier = Modifier) {
     Canvas(modifier = modifier) {
         val r = size.minDimension / 2f
@@ -348,6 +371,132 @@ fun MT5RedRingLogo(modifier: Modifier = Modifier) {
                 strokeWidth = 1.6.dp.toPx()
             )
         }
+    }
+}
+
+/**
+ * FundingPips dark navy square logo with stylized white 'iP.' mark
+ * matching Screenshot 877674013_1585388529567270_7881693641041831359_n.jpg
+ */
+@Composable
+fun MT5FundingPipsLogo(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        // Deep navy square background
+        drawRect(
+            color = Color(0xFF080F3B),
+            topLeft = Offset.Zero,
+            size = size
+        )
+        val stroke = (w * 0.085f).coerceAtLeast(2f)
+        // Top-left dot
+        drawCircle(
+            color = Color.White,
+            radius = w * 0.052f,
+            center = Offset(w * 0.33f, h * 0.30f)
+        )
+        // Left vertical stem
+        drawLine(
+            color = Color.White,
+            start = Offset(w * 0.33f, h * 0.44f),
+            end = Offset(w * 0.33f, h * 0.72f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Square
+        )
+        // Middle-right 'P' stem + loop
+        drawLine(
+            color = Color.White,
+            start = Offset(w * 0.47f, h * 0.30f),
+            end = Offset(w * 0.47f, h * 0.72f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Square
+        )
+        drawLine(
+            color = Color.White,
+            start = Offset(w * 0.47f, h * 0.30f),
+            end = Offset(w * 0.66f, h * 0.30f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
+        drawArc(
+            color = Color.White,
+            startAngle = -90f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(w * 0.54f, h * 0.30f),
+            size = androidx.compose.ui.geometry.Size(w * 0.18f, h * 0.22f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round)
+        )
+        drawLine(
+            color = Color.White,
+            start = Offset(w * 0.47f, h * 0.52f),
+            end = Offset(w * 0.64f, h * 0.52f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
+        // Bottom-right period dot
+        drawCircle(
+            color = Color.White,
+            radius = w * 0.048f,
+            center = Offset(w * 0.69f, h * 0.70f)
+        )
+    }
+}
+
+/**
+ * Fusion Markets purple circle logo with stylized white 'F' mark
+ * matching Screenshot 877674013_1585388529567270_7881693641041831359_n.jpg
+ */
+@Composable
+fun MT5FusionMarketsLogo(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val r = size.minDimension / 2f
+        val center = Offset(w / 2f, h / 2f)
+
+        // Purple circle background
+        drawCircle(
+            color = Color(0xFF6B22B5),
+            radius = r,
+            center = center
+        )
+        // Subtle lighter purple highlight on right half
+        drawArc(
+            color = Color(0xFF8338EC).copy(alpha = 0.45f),
+            startAngle = -60f,
+            sweepAngle = 160f,
+            useCenter = true,
+            topLeft = Offset.Zero,
+            size = size
+        )
+
+        val stroke = (w * 0.105f).coerceAtLeast(2.5f)
+        // Top bar of stylized 'F'
+        drawLine(
+            color = Color.White,
+            start = Offset(w * 0.33f, h * 0.28f),
+            end = Offset(w * 0.76f, h * 0.28f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
+        // Vertical stem of 'F'
+        drawLine(
+            color = Color.White,
+            start = Offset(w * 0.33f, h * 0.28f),
+            end = Offset(w * 0.33f, h * 0.78f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
+        // Middle bar of 'F'
+        drawLine(
+            color = Color.White,
+            start = Offset(w * 0.33f, h * 0.50f),
+            end = Offset(w * 0.64f, h * 0.50f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
     }
 }
 
