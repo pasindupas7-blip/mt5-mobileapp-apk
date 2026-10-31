@@ -743,17 +743,19 @@ class FastForexService private constructor(
         val symHash = normSym.hashCode()
         val symPhase = (symHash and 0x7FFF).toDouble() * 0.07
 
-        // Multi-scale market structure waves (macro, swing, meso, micro) + deterministic per-bar impulse
+        // Multi-scale market structure waves (macro, swing, meso, micro) + deterministic per-bar alternation
         val dIdx = bucketIndex.toDouble()
-        val macroWave = sin(dIdx * 0.014 + symPhase) * 6.8 +
-            cos(dIdx * 0.039 - symPhase * 0.8) * 3.9
-        val swingWave = sin(dIdx * 0.105 + symPhase * 1.4) * 2.1 +
-            cos(dIdx * 0.24 - symPhase * 1.9) * 1.25
+        val macroWave = sin(dIdx * 0.014 + symPhase) * 6.2 +
+            cos(dIdx * 0.039 - symPhase * 0.8) * 3.6
+        val swingWave = sin(dIdx * 0.115 + symPhase * 1.4) * 1.9 +
+            cos(dIdx * 0.27 - symPhase * 1.9) * 1.2
+        val microWave = sin(dIdx * 2.399963 + symPhase) * 0.92 +
+            cos(dIdx * 1.37 - symPhase * 0.6) * 0.64
         val barSeed = (bucketIndex xor symHash.toLong() xor (timeframe.minutes.toLong() shl 16)).toInt()
         val rng = Random(barSeed)
-        val barImpulse = (rng.nextDouble() - 0.5) * 1.18 + sin(dIdx * 1.618 + symPhase) * 0.36
+        val barImpulse = (rng.nextDouble() - 0.5) * 1.55 + microWave
 
-        val offset = (macroWave + swingWave + barImpulse) * unitRange * 0.48
+        val offset = (macroWave + swingWave + barImpulse) * unitRange * 0.46
         val rawPrice = (baseAnchor + offset).coerceAtLeast(minPoint * 10.0)
         return kotlin.math.round(rawPrice / minPoint) * minPoint
     }
@@ -781,7 +783,7 @@ class FastForexService private constructor(
 
         if (abs(close - open) < minPoint * 2.0) {
             val dir = if (rng.nextBoolean()) 1.0 else -1.0
-            close = (open + dir * max(minPoint * 2.0, unitRange * 0.06)).coerceAtLeast(minPoint * 10.0)
+            close = (open + dir * max(minPoint * 2.0, unitRange * (0.08 + rng.nextDouble() * 0.18))).coerceAtLeast(minPoint * 10.0)
         }
 
         val bodyTop = max(open, close)
@@ -812,36 +814,207 @@ class FastForexService private constructor(
     }
 
     /**
-     * Builds a deterministic 1-minute (M1) candlestick at [minuteBucketMs] around [anchorPrice].
+     * Builds a deterministic 1-minute (M1) candlestick at [minuteBucketMs] around [anchorPrice]
+     * with natural bar-to-bar bullish/bearish alternation.
      */
     fun buildSingleM1CandleAt(symbol: String, minuteBucketMs: Long, anchorPrice: Double): Candle {
         val normSym = normalizeSymbol(symbol)
         val m1Range = getNaturalM1Range(normSym)
         val minPoint = getMinPoint(normSym)
         val bucketIndex = (minuteBucketMs / 60_000L)
-        val seed = (bucketIndex xor normSym.hashCode().toLong()).toInt()
+        val seed = (bucketIndex xor normSym.hashCode().toLong() xor (bucketIndex ushr 11)).toInt()
         val rng = Random(seed)
         val symPhase = (normSym.hashCode() and 0x7FFF).toDouble() * 0.07
-        val wave = sin(bucketIndex.toDouble() * 0.11 + symPhase) * 0.30 +
-            cos(bucketIndex.toDouble() * 0.23 - symPhase) * 0.22 +
-            (rng.nextDouble() - 0.5) * 0.65
-        val delta = (wave * m1Range * 0.45).let {
-            if (abs(it) < minPoint * 2.0) (if (it >= 0.0) minPoint * 2.0 else -minPoint * 2.0) else it
+        // Golden-angle high-frequency oscillation so consecutive minutes naturally alternate bullish/bearish
+        val wave = sin(bucketIndex.toDouble() * 2.399963 + symPhase) * 0.46 +
+            cos(bucketIndex.toDouble() * 1.37 - symPhase) * 0.32 +
+            (rng.nextDouble() - 0.5) * 0.90
+        val delta = (wave * m1Range * 0.48).let {
+            if (abs(it) < minPoint * 2.0) (if (rng.nextBoolean()) minPoint * 3.0 else -minPoint * 3.0) else it
         }
-        val open = (anchorPrice - delta * 0.5).coerceAtLeast(minPoint * 10.0)
-        val close = (anchorPrice + delta * 0.5).coerceAtLeast(minPoint * 10.0)
-        val highWick = (0.18 + rng.nextDouble() * 0.35) * m1Range * 0.45
-        val lowWick = (0.18 + rng.nextDouble() * 0.35) * m1Range * 0.45
-        val high = max(open, close) + highWick
-        val low = (min(open, close) - lowWick).coerceAtLeast(minPoint)
+        val open = kotlin.math.round((anchorPrice - delta * 0.5).coerceAtLeast(minPoint * 10.0) / minPoint) * minPoint
+        val close = kotlin.math.round((anchorPrice + delta * 0.5).coerceAtLeast(minPoint * 10.0) / minPoint) * minPoint
+        val highWick = (0.18 + rng.nextDouble() * 0.38) * m1Range * 0.45
+        val lowWick = (0.18 + rng.nextDouble() * 0.38) * m1Range * 0.45
+        val high = kotlin.math.round((max(open, close) + highWick) / minPoint) * minPoint
+        val low = (kotlin.math.round((min(open, close) - lowWick) / minPoint) * minPoint).coerceAtLeast(minPoint)
         return Candle(
             time = formatCandleTimestamp(minuteBucketMs, Timeframe.M1),
             timestamp = minuteBucketMs,
             open = open,
-            high = high,
-            low = low,
+            high = max(high, max(open, close)),
+            low = min(low, min(open, close)),
             close = close
         )
+    }
+
+    /**
+     * Generates a connected series of realistic, naturally alternating bullish/bearish candlesticks
+     * across [openBuckets] starting at [startPrice] (first candle's open) and ending at [endPrice]
+     * (last candle's close), with every candle's open equal to the previous candle's close.
+     * Guarantees natural counter-trend pullback candles (~38% of bars) so the chart NEVER displays
+     * robotic single-color diagonal staircases (////// or \\\\\\) or vertical price cliffs.
+     */
+    fun buildConnectedCandleBridge(
+        symbol: String,
+        timeframe: Timeframe,
+        openBuckets: LongArray,
+        startPrice: Double,
+        endPrice: Double
+    ): List<Candle> {
+        if (openBuckets.isEmpty()) return emptyList()
+        val normSym = normalizeSymbol(symbol)
+        val minPoint = getMinPoint(normSym)
+        val unitRange = getNaturalM1Range(normSym) * getTimeframeTickScale(timeframe)
+        val tfIntervalMs = (timeframe.minutes * 60_000L).coerceAtLeast(60_000L)
+        val symHash = normSym.hashCode().toLong()
+
+        val safeStart = startPrice.takeIf { it > 0.0 } ?: getCanonicalBasePrice(normSym)
+        val safeEnd = endPrice.takeIf { it > 0.0 } ?: safeStart
+
+        val n = openBuckets.size
+        if (n == 1) {
+            val ts = openBuckets[0]
+            val rng = Random(((ts / tfIntervalMs) xor symHash).toInt())
+            val open = kotlin.math.round(safeStart / minPoint) * minPoint
+            var close = kotlin.math.round(safeEnd / minPoint) * minPoint
+            if (abs(close - open) < minPoint * 2.0) {
+                val dir = if (rng.nextBoolean()) 1.0 else -1.0
+                close = (open + dir * max(minPoint * 2.0, unitRange * 0.14)).coerceAtLeast(minPoint * 10.0)
+            }
+            val bodySize = abs(close - open).coerceAtLeast(minPoint)
+            val upWick = max(minPoint * 2.0, (unitRange * 0.24 + bodySize * 0.25) * (0.25 + rng.nextDouble() * 0.55))
+            val dnWick = max(minPoint * 2.0, (unitRange * 0.24 + bodySize * 0.25) * (0.25 + rng.nextDouble() * 0.55))
+            val high = kotlin.math.round((max(open, close) + upWick) / minPoint) * minPoint
+            val low = (kotlin.math.round((min(open, close) - dnWick) / minPoint) * minPoint).coerceAtLeast(minPoint)
+            return listOf(
+                Candle(
+                    time = formatCandleTimestamp(ts, timeframe),
+                    timestamp = ts,
+                    open = open,
+                    high = max(high, max(open, close)),
+                    low = min(low, min(open, close)),
+                    close = close
+                )
+            )
+        }
+
+        val totalDiff = safeEnd - safeStart
+        val overallDir = if (totalDiff >= 0.0) 1 else -1
+
+        val signs = IntArray(n)
+        val rawMags = DoubleArray(n)
+        var consecutiveSame = 0
+        var prevSign = 0
+        var hasPos = false
+        var hasNeg = false
+
+        for (i in 0 until n) {
+            val bIdx = openBuckets[i] / tfIntervalMs
+            val seed = (bIdx xor symHash xor (i.toLong() * 2654435761L)).toInt()
+            val rng = Random(seed)
+            // ~60% of bars follow the local swing/trend, ~40% are counter-trend pullback bars
+            val waveBias = sin(bIdx.toDouble() * 0.37) * 0.18
+            val followProb = (0.58 + waveBias).coerceIn(0.42, 0.68)
+            var s = if (rng.nextDouble() < followProb) overallDir else -overallDir
+            if (s == prevSign && consecutiveSame >= 2) {
+                // Force a pullback bar after 2-3 bars of the same color so we never get staircase lines
+                if (consecutiveSame >= 3 || rng.nextDouble() < 0.72) {
+                    s = -s
+                }
+            }
+            if (s == prevSign) {
+                consecutiveSame++
+            } else {
+                prevSign = s
+                consecutiveSame = 1
+            }
+            signs[i] = s
+            if (s > 0) hasPos = true else hasNeg = true
+            rawMags[i] = (0.32 + rng.nextDouble() * 0.95) * unitRange * 0.52
+        }
+
+        if (!hasPos) {
+            signs[n / 2] = 1
+        }
+        if (!hasNeg) {
+            signs[(n / 2 + 1) % n] = -1
+        }
+
+        var sumPos = 0.0
+        var sumNeg = 0.0
+        for (i in 0 until n) {
+            if (signs[i] > 0) sumPos += rawMags[i] else sumNeg += rawMags[i]
+        }
+        sumPos = sumPos.coerceAtLeast(minPoint)
+        sumNeg = sumNeg.coerceAtLeast(minPoint)
+
+        // Ensure counter-trend pullback bars have meaningful visible bodies while exact sum == totalDiff
+        val baseCounterBudget = max(
+            min(sumPos, sumNeg) * 0.78,
+            abs(totalDiff) * 0.36
+        )
+        val scalePos: Double
+        val scaleNeg: Double
+        if (totalDiff >= 0.0) {
+            val targetNeg = baseCounterBudget
+            val targetPos = totalDiff + targetNeg
+            scalePos = targetPos / sumPos
+            scaleNeg = targetNeg / sumNeg
+        } else {
+            val targetPos = baseCounterBudget
+            val targetNeg = abs(totalDiff) + targetPos
+            scalePos = targetPos / sumPos
+            scaleNeg = targetNeg / sumNeg
+        }
+
+        val candles = ArrayList<Candle>(n)
+        var runningOpen = kotlin.math.round(safeStart / minPoint) * minPoint
+
+        for (i in 0 until n) {
+            val ts = openBuckets[i]
+            val bIdx = ts / tfIntervalMs
+            val rng = Random((bIdx xor symHash xor (i.toLong() shl 7)).toInt())
+            val signedDelta = if (signs[i] > 0) {
+                rawMags[i] * scalePos
+            } else {
+                -rawMags[i] * scaleNeg
+            }
+
+            val barOpen = runningOpen
+            var barClose = if (i == n - 1) {
+                kotlin.math.round(safeEnd / minPoint) * minPoint
+            } else {
+                kotlin.math.round((barOpen + signedDelta).coerceAtLeast(minPoint * 10.0) / minPoint) * minPoint
+            }
+
+            if (abs(barClose - barOpen) < minPoint * 2.0) {
+                val nudge = signs[i].toDouble() * max(minPoint * 2.0, unitRange * 0.08)
+                barClose = kotlin.math.round((barOpen + nudge).coerceAtLeast(minPoint * 10.0) / minPoint) * minPoint
+            }
+
+            val bodyTop = max(barOpen, barClose)
+            val bodyBot = min(barOpen, barClose)
+            val bodySize = (bodyTop - bodyBot).coerceAtLeast(minPoint)
+            val upWick = max(minPoint * 2.0, (unitRange * 0.22 + bodySize * 0.28) * (0.18 + rng.nextDouble() * 0.58))
+            val dnWick = max(minPoint * 2.0, (unitRange * 0.22 + bodySize * 0.28) * (0.18 + rng.nextDouble() * 0.58))
+            val high = kotlin.math.round((bodyTop + upWick) / minPoint) * minPoint
+            val low = (kotlin.math.round((bodyBot - dnWick) / minPoint) * minPoint).coerceAtLeast(minPoint)
+
+            candles.add(
+                Candle(
+                    time = formatCandleTimestamp(ts, timeframe),
+                    timestamp = ts,
+                    open = barOpen,
+                    high = max(high, bodyTop),
+                    low = min(low, bodyBot),
+                    close = barClose
+                )
+            )
+            runningOpen = barClose
+        }
+
+        return candles
     }
 
     /**
@@ -960,36 +1133,55 @@ class FastForexService private constructor(
     ): List<Candle> {
         val binanceSymbol = if (symbol == "XAUUSD") "PAXGUSDT" else "BTCUSDT"
         val (intervalStr, limitCount) = when (timeframe) {
-            Timeframe.M1 -> Pair("1m", 500)
-            Timeframe.M5 -> Pair("5m", 500)
-            Timeframe.M15 -> Pair("15m", 500)
-            Timeframe.M30 -> Pair("30m", 500)
-            Timeframe.H1 -> Pair("1h", 350)
-            Timeframe.H4 -> Pair("4h", 180)
-            Timeframe.D1 -> Pair("1d", 90)
-            Timeframe.W1 -> Pair("1w", 52)
-            Timeframe.MN -> Pair("1M", 24)
+            Timeframe.M1 -> Pair("1m", 1000)
+            Timeframe.M5 -> Pair("5m", 1000)
+            Timeframe.M15 -> Pair("15m", 1000)
+            Timeframe.M30 -> Pair("30m", 1000)
+            Timeframe.H1 -> Pair("1h", 750)
+            Timeframe.H4 -> Pair("4h", 360)
+            Timeframe.D1 -> Pair("1d", 120)
+            Timeframe.W1 -> Pair("1w", 100)
+            Timeframe.MN -> Pair("1M", 48)
         }
 
-        val endpoints = listOf(
-            "https://data-api.binance.vision/api/v3/klines?symbol=$binanceSymbol&interval=$intervalStr&limit=$limitCount",
-            "https://api.binance.com/api/v3/klines?symbol=$binanceSymbol&interval=$intervalStr&limit=$limitCount"
+        val baseEndpoints = listOf(
+            "https://data-api.binance.vision/api/v3/klines",
+            "https://api.binance.com/api/v3/klines"
         )
 
-        for (url in endpoints) {
+        val maxPages = if (timeframe == Timeframe.M1) 4 else if (timeframe == Timeframe.M5) 2 else 1
+
+        for (baseUrl in baseEndpoints) {
             try {
-                val request = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", USER_AGENT)
-                    .get()
-                    .build()
-                okHttpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@use
-                    val body = response.body?.string() ?: return@use
-                    val rawCandles = parseBinanceKlinesJson(body, timeframe)
-                    if (rawCandles.size >= 15) {
-                        return ensureContinuousRealCandles(rawCandles, symbol, timeframe)
+                val collected = ArrayList<Candle>(limitCount * maxPages)
+                var endTimeParam: Long? = null
+                for (page in 0 until maxPages) {
+                    val url = if (endTimeParam != null) {
+                        "$baseUrl?symbol=$binanceSymbol&interval=$intervalStr&limit=$limitCount&endTime=$endTimeParam"
+                    } else {
+                        "$baseUrl?symbol=$binanceSymbol&interval=$intervalStr&limit=$limitCount"
                     }
+                    val request = Request.Builder()
+                        .url(url)
+                        .header("User-Agent", USER_AGENT)
+                        .get()
+                        .build()
+                    var pageCandles: List<Candle> = emptyList()
+                    okHttpClient.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val body = response.body?.string()
+                            if (!body.isNullOrEmpty()) {
+                                pageCandles = parseBinanceKlinesJson(body, timeframe)
+                            }
+                        }
+                    }
+                    if (pageCandles.isEmpty()) break
+                    collected.addAll(0, pageCandles)
+                    val earliestTs = pageCandles.minOfOrNull { it.timestamp } ?: break
+                    endTimeParam = earliestTs - 1L
+                }
+                if (collected.size >= 15) {
+                    return ensureContinuousRealCandles(collected, symbol, timeframe)
                 }
             } catch (e: Exception) {
                 Log.d(TAG, "Binance klines endpoint error for $symbol: ${e.message}")
@@ -1034,40 +1226,42 @@ class FastForexService private constructor(
         timeframe: Timeframe
     ): List<Candle> {
         val ticker = toYahooTicker(symbol)
-        val (intervalParam, rangeParam) = when (timeframe) {
-            Timeframe.M1 -> Pair("1m", "5d")
-            Timeframe.M5 -> Pair("5m", "1mo")
-            Timeframe.M15 -> Pair("15m", "1mo")
-            Timeframe.M30 -> Pair("30m", "1mo")
-            Timeframe.H1 -> Pair("1h", "1mo")
-            Timeframe.H4 -> Pair("1h", "3mo") // Aggregated to 4H buckets below
-            Timeframe.D1 -> Pair("1d", "3mo")
-            Timeframe.W1 -> Pair("1wk", "1y")
-            Timeframe.MN -> Pair("1mo", "5y")
+        val (intervalParam, rangeOptions) = when (timeframe) {
+            Timeframe.M1 -> Pair("1m", listOf("7d", "5d"))
+            Timeframe.M5 -> Pair("5m", listOf("60d", "1mo"))
+            Timeframe.M15 -> Pair("15m", listOf("60d", "1mo"))
+            Timeframe.M30 -> Pair("30m", listOf("60d", "1mo"))
+            Timeframe.H1 -> Pair("1h", listOf("3mo", "1mo"))
+            Timeframe.H4 -> Pair("1h", listOf("6mo", "3mo")) // Aggregated to 4H buckets below
+            Timeframe.D1 -> Pair("1d", listOf("6mo", "3mo"))
+            Timeframe.W1 -> Pair("1wk", listOf("2y", "1y"))
+            Timeframe.MN -> Pair("1mo", listOf("5y"))
         }
 
-        val urls = listOf(
-            "https://query1.finance.yahoo.com/v8/finance/chart/$ticker?interval=$intervalParam&range=$rangeParam",
-            "https://query2.finance.yahoo.com/v8/finance/chart/$ticker?interval=$intervalParam&range=$rangeParam"
-        )
+        for (rangeParam in rangeOptions) {
+            val urls = listOf(
+                "https://query1.finance.yahoo.com/v8/finance/chart/$ticker?interval=$intervalParam&range=$rangeParam",
+                "https://query2.finance.yahoo.com/v8/finance/chart/$ticker?interval=$intervalParam&range=$rangeParam"
+            )
 
-        for (url in urls) {
-            try {
-                val request = Request.Builder()
-                    .url(url)
-                    .header("User-Agent", USER_AGENT)
-                    .get()
-                    .build()
-                okHttpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@use
-                    val body = response.body?.string() ?: return@use
-                    val parsed = parseYahooChartJson(body, symbol, timeframe)
-                    if (parsed.size >= 10) {
-                        return parsed
+            for (url in urls) {
+                try {
+                    val request = Request.Builder()
+                        .url(url)
+                        .header("User-Agent", USER_AGENT)
+                        .get()
+                        .build()
+                    okHttpClient.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) return@use
+                        val body = response.body?.string() ?: return@use
+                        val parsed = parseYahooChartJson(body, symbol, timeframe)
+                        if (parsed.size >= 10) {
+                            return parsed
+                        }
                     }
+                } catch (e: Exception) {
+                    Log.d(TAG, "Yahoo Finance chart error for $symbol ($timeframe, $rangeParam): ${e.message}")
                 }
-            } catch (e: Exception) {
-                Log.d(TAG, "Yahoo Finance chart error for $symbol ($timeframe): ${e.message}")
             }
         }
         return emptyList()
@@ -1176,8 +1370,9 @@ class FastForexService private constructor(
      * Preserves real-world price levels and authentic market structure while ensuring:
      * 1. Only candles inside Monday 03:30 AM .. Saturday 02:29 AM Sri Lanka Time are included.
      * 2. Intra-minute snapshot ticks from Yahoo Finance merge into their active minute bucket.
-     * 3. Exchange-delayed feeds (such as the 10-minute COMEX delay on GC=F / XAUUSD M1) align their
-     *    real 1-minute candles directly up to `currentBucket` without appending fake flat tail bars.
+     * 3. Any missing open-market intervals inside the series are seamlessly bridged with connected,
+     *    naturally alternating candlesticks so the X-axis never skips hours or dates.
+     * 4. M1 and M5 histories always cover at least a full 7+ day window of continuous open-market bars.
      */
     private fun ensureContinuousRealCandles(
         rawCandles: List<Candle>,
@@ -1202,7 +1397,6 @@ class FastForexService private constructor(
 
         // If the upstream feed is running on wall-clock time (ahead of chartNowMillis by ~10m),
         // shift its raw timestamps back by CHART_TIME_OFFSET_MS so chart time is 10 minutes earlier.
-        // Feeds that already have a ~10m exchange delay (like GC=F / XAUUSD) are already at chartNowMillis.
         val rawLastTs = sortedRawUnshifted.last().timestamp
         val preBucketShiftMs = if (timeframe.minutes < Timeframe.D1.minutes && rawLastTs > clampedOpenNow + 90_000L) {
             -SriLankaMarketHours.CHART_TIME_OFFSET_MS
@@ -1221,7 +1415,7 @@ class FastForexService private constructor(
         }
         if (sortedRaw.isEmpty()) return emptyList()
 
-        // 1. Merge raw candles that fall into the same timeframe bucket (e.g. Yahoo's :00s bar + :31s live tick)
+        // 1. Merge raw candles that fall into the same timeframe bucket
         val mergedByBucket = LinkedHashMap<Long, Candle>(sortedRaw.size)
         for (c in sortedRaw) {
             val b = (c.timestamp / intervalMs) * intervalMs
@@ -1260,14 +1454,14 @@ class FastForexService private constructor(
             0L
         }
 
-        val result = ArrayList<Candle>(bucketedList.size + 16)
+        val result = ArrayList<Candle>(bucketedList.size + 512)
 
         fun appendStyledCandle(ts: Long, rawOpen: Double, rawHigh: Double, rawLow: Double, rawClose: Double) {
             val prevCandle = result.lastOrNull()
             val prevClose = prevCandle?.close
             val open = if (prevClose != null &&
                 timeframe.minutes < Timeframe.D1.minutes &&
-                abs(rawOpen - prevClose) <= unitRange * 8.0
+                abs(rawOpen - prevClose) <= unitRange * 12.0
             ) {
                 prevClose
             } else {
@@ -1318,27 +1512,21 @@ class FastForexService private constructor(
             val prevCandle = result.lastOrNull()
             if (prevCandle != null && timeframe.minutes < Timeframe.D1.minutes) {
                 val prevBucket = prevCandle.timestamp
-                val gapSteps = ((bucketTs - prevBucket) / intervalMs).toInt()
-                if (gapSteps in 2..8) {
-                    val startP = prevCandle.close
-                    val endP = c.open
-                    for (step in 1 until gapSteps) {
-                        val midTs = prevBucket + step * intervalMs
-                        if (!SriLankaMarketHours.isMarketOpen(midTs)) continue
-                        val frac = step.toDouble() / gapSteps.toDouble()
-                        val seed = ((midTs / intervalMs) xor normSym.hashCode().toLong()).toInt()
-                        val rng = Random(seed)
-                        val wave = (rng.nextDouble() - 0.5) * unitRange * 0.30
-                        val targetMidClose = startP + (endP - startP) * frac + wave
-                        val prevC = result.last().close
-                        appendStyledCandle(
-                            ts = midTs,
-                            rawOpen = prevC,
-                            rawHigh = max(prevC, targetMidClose),
-                            rawLow = min(prevC, targetMidClose),
-                            rawClose = targetMidClose
-                        )
-                    }
+                val missingBuckets = SriLankaMarketHours.buildOpenMarketTimestampsBetween(
+                    startExclusiveMs = prevBucket,
+                    endExclusiveMs = bucketTs,
+                    intervalMs = intervalMs,
+                    maxSteps = 4000
+                )
+                if (missingBuckets.isNotEmpty()) {
+                    val bridged = buildConnectedCandleBridge(
+                        symbol = normSym,
+                        timeframe = timeframe,
+                        openBuckets = missingBuckets,
+                        startPrice = prevCandle.close,
+                        endPrice = c.open
+                    )
+                    result.addAll(bridged)
                 }
             }
 
@@ -1349,6 +1537,44 @@ class FastForexService private constructor(
                 rawLow = c.low,
                 rawClose = c.close
             )
+        }
+
+        // 3. Ensure multi-day depth (at least ~7+ trading days for M1/M5) so scrolling back never runs out early
+        val minTargetCount = when (timeframe) {
+            Timeframe.M1 -> 7200
+            Timeframe.M5 -> 2400
+            Timeframe.M15 -> 1200
+            Timeframe.M30 -> 900
+            else -> 0
+        }
+        if (minTargetCount > 0 && result.isNotEmpty() && result.size < minTargetCount) {
+            val needed = minTargetCount - result.size
+            val firstReal = result.first()
+            val prependTimestamps = LongArray(needed)
+            var cursor = firstReal.timestamp
+            for (i in (needed - 1) downTo 0) {
+                cursor = SriLankaMarketHours.stepBackwardOpenMarketBucket(cursor, intervalMs)
+                prependTimestamps[i] = cursor
+            }
+            val startAnchor = deterministicCloseAtBucket(
+                symbol = normSym,
+                timeframe = timeframe,
+                bucketTimestampMs = SriLankaMarketHours.stepBackwardOpenMarketBucket(prependTimestamps.first(), intervalMs),
+                customAnchorPrice = firstReal.open
+            )
+            val prepended = buildConnectedCandleBridge(
+                symbol = normSym,
+                timeframe = timeframe,
+                openBuckets = prependTimestamps,
+                startPrice = startAnchor,
+                endPrice = firstReal.open
+            )
+            if (prepended.isNotEmpty()) {
+                val combined = ArrayList<Candle>(prepended.size + result.size)
+                combined.addAll(prepended)
+                combined.addAll(result)
+                return combined
+            }
         }
 
         return result
@@ -1368,18 +1594,18 @@ class FastForexService private constructor(
         val normSym = normalizeSymbol(symbol)
         val now = SriLankaMarketHours.chartNowMillis()
         val tfIntervalMs = (timeframe.minutes * 60_000L).coerceAtLeast(60_000L)
-        val canonicalAnchor = getCanonicalBasePrice(normSym)
+        val canonicalAnchor = livePrice.takeIf { it > 0.0 } ?: getCanonicalBasePrice(normSym)
 
         val candleCount = when (timeframe) {
             Timeframe.MN -> 60
             Timeframe.W1 -> 100
             Timeframe.D1 -> 120
             Timeframe.H4 -> 240
-            Timeframe.H1 -> 500
-            Timeframe.M30 -> 900
-            Timeframe.M15 -> 900
-            Timeframe.M5 -> 900
-            Timeframe.M1 -> 900
+            Timeframe.H1 -> 600
+            Timeframe.M30 -> 1000
+            Timeframe.M15 -> 1400
+            Timeframe.M5 -> 2400
+            Timeframe.M1 -> 7200
         }
 
         // Generate timestamps strictly inside Monday 03:30 AM .. Saturday 02:29 AM Sri Lanka Time

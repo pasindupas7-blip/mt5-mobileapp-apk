@@ -810,7 +810,6 @@ class TradingRepository(private val scope: CoroutineScope) {
         val initialDisplay = when {
             cached != null && cached.isNotEmpty() -> syncTradesIntoCandles(cleanSymbol, currentActiveTimeframe, cached)
             saved.isNotEmpty() -> {
-                loaded14DayKeys.add(key)
                 syncTradesIntoCandles(cleanSymbol, currentActiveTimeframe, saved)
             }
             else -> {
@@ -859,7 +858,6 @@ class TradingRepository(private val scope: CoroutineScope) {
         val initialDisplay = when {
             cached != null && cached.isNotEmpty() -> syncTradesIntoCandles(currentActiveSymbol, timeframe, cached)
             saved.isNotEmpty() -> {
-                loaded14DayKeys.add(key)
                 syncTradesIntoCandles(currentActiveSymbol, timeframe, saved)
             }
             else -> {
@@ -888,7 +886,11 @@ class TradingRepository(private val scope: CoroutineScope) {
 
     /**
      * Synchronizes historical trades (`_history`) and running open positions (`_positions`) for [symbol]
-     * into the candlestick series for [timeframe] WITHOUT overwriting or distorting the real market candlesticks.
+     * into the candlestick series for [timeframe] with:
+     * 1. Continuous open-market timestamps (zero missing minutes/hours/days on the X-axis).
+     * 2. Natural alternating bullish/bearish candlesticks (`buildConnectedCandleBridge`) during and between
+     *    trades so there are never robotic single-color diagonal staircases (`//////` or `\\\\\\`) or
+     *    disconnected 10-candle islands.
      */
     fun syncTradesIntoCandles(
         symbol: String,
@@ -906,222 +908,331 @@ class TradingRepository(private val scope: CoroutineScope) {
         val minPoint = fastForexService.getMinPoint(cleanSym)
         val unitRange = fastForexService.getNaturalM1Range(cleanSym) * fastForexService.getTimeframeTickScale(timeframe)
 
-        val bucketMap = LinkedHashMap<Long, Candle>(baseCandles.size + 128)
+        val bucketMap = LinkedHashMap<Long, Candle>(baseCandles.size + 512)
         for (c in baseCandles) {
-            if (c.timestamp > 0L) {
+            if (c.timestamp > 0L && SriLankaMarketHours.isMarketOpen(c.timestamp)) {
                 val b = (c.timestamp / tfIntervalMs) * tfIntervalMs
-                bucketMap[b] = c.copy(timestamp = b, time = fastForexService.formatCandleTimestamp(b, timeframe))
+                if (SriLankaMarketHours.isMarketOpen(b)) {
+                    bucketMap[b] = c.copy(timestamp = b, time = fastForexService.formatCandleTimestamp(b, timeframe))
+                }
             }
         }
 
-        val earliestRealBucket = bucketMap.keys.minOrNull() ?: Long.MAX_VALUE
+        // Collect valid trade bucket ranges
+        data class TradeSpan(
+            val openBucket: Long,
+            val closeBucket: Long,
+            val openPrice: Double,
+            val closePrice: Double
+        )
 
-        // 1. Anchor closed HistoryTrades for this symbol without overwriting real market candles
+        val tradeSpans = ArrayList<TradeSpan>(symbolTrades.size)
         for (trade in symbolTrades) {
             val rawOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(trade.openTime)
             val rawCloseMs = SriLankaMarketHours.parseMt5DateTimeMillis(trade.closeTime)
-            if (rawOpenMs <= 0L) continue
-
+            if (rawOpenMs <= 0L || trade.openPrice <= 0.0 || trade.closePrice <= 0.0) continue
             val clampedOpenMs = SriLankaMarketHours.clampToLastOpenMarketTimestamp(rawOpenMs)
-            val openBucket = (clampedOpenMs / tfIntervalMs) * tfIntervalMs
+            var openBucket = (clampedOpenMs / tfIntervalMs) * tfIntervalMs
+            while (!SriLankaMarketHours.isMarketOpen(openBucket)) {
+                openBucket = SriLankaMarketHours.stepBackwardOpenMarketBucket(openBucket, tfIntervalMs)
+            }
             val clampedCloseMs = if (rawCloseMs > 0L) {
                 SriLankaMarketHours.clampToLastOpenMarketTimestamp(rawCloseMs)
             } else {
                 clampedOpenMs
             }
-            val closeBucket = max(openBucket, (clampedCloseMs / tfIntervalMs) * tfIntervalMs)
-
-            val existingOpen = bucketMap[openBucket]
-            val existingClose = bucketMap[closeBucket]
-
-            // If real market candles already exist at openBucket or closeBucket, NEVER overwrite the real candles!
-            // Only expand high/low wick if the trade price is within the real candle's neighborhood.
-            if (existingOpen != null || existingClose != null || openBucket >= earliestRealBucket) {
-                if (existingOpen != null && abs(existingOpen.close - trade.openPrice) <= unitRange * 12.0) {
-                    bucketMap[openBucket] = existingOpen.copy(
-                        high = max(existingOpen.high, trade.openPrice),
-                        low = min(existingOpen.low, trade.openPrice).coerceAtLeast(minPoint)
-                    )
-                }
-                val currentExit = bucketMap[closeBucket]
-                if (currentExit != null && abs(currentExit.close - trade.closePrice) <= unitRange * 12.0) {
-                    bucketMap[closeBucket] = currentExit.copy(
-                        high = max(currentExit.high, trade.closePrice),
-                        low = min(currentExit.low, trade.closePrice).coerceAtLeast(minPoint)
-                    )
-                }
-                continue
+            var closeBucket = max(openBucket, (clampedCloseMs / tfIntervalMs) * tfIntervalMs)
+            while (!SriLankaMarketHours.isMarketOpen(closeBucket)) {
+                closeBucket = SriLankaMarketHours.stepBackwardOpenMarketBucket(closeBucket, tfIntervalMs)
             }
-
-            // Build surrounding pre-trade context (10 bars before openBucket) if those buckets don't exist yet
-            var leadCursor = openBucket
-            val preBuckets = ArrayList<Long>(10)
-            for (k in 0 until 10) {
-                leadCursor = SriLankaMarketHours.stepBackwardOpenMarketBucket(leadCursor, tfIntervalMs)
-                if (bucketMap.containsKey(leadCursor)) break
-                preBuckets.add(leadCursor)
-            }
-            if (preBuckets.isNotEmpty()) {
-                var nextTargetOpen = trade.openPrice
-                for (pb in preBuckets) {
-                    val built = fastForexService.buildSingleM1CandleAt(cleanSym, pb, nextTargetOpen)
-                    val bodyDelta = (built.close - built.open).let {
-                        if (abs(it) < minPoint * 2.0) (if (it >= 0.0) minPoint * 3.0 else -minPoint * 3.0) else it
-                    }
-                    val barClose = nextTargetOpen
-                    val barOpen = (barClose - bodyDelta).coerceAtLeast(minPoint * 10.0)
-                    val upWick = (built.high - max(built.open, built.close)).coerceAtLeast(minPoint * 2.0)
-                    val dnWick = (min(built.open, built.close) - built.low).coerceAtLeast(minPoint * 2.0)
-                    bucketMap[pb] = Candle(
-                        time = fastForexService.formatCandleTimestamp(pb, timeframe),
-                        timestamp = pb,
-                        open = barOpen,
-                        high = max(barOpen, barClose) + upWick,
-                        low = (min(barOpen, barClose) - dnWick).coerceAtLeast(minPoint),
-                        close = barClose
-                    )
-                    nextTargetOpen = barOpen
-                }
-            }
-
-            val prevBucketBeforeOpen = SriLankaMarketHours.stepBackwardOpenMarketBucket(openBucket, tfIntervalMs)
-            val prevBeforeOpenClose = bucketMap[prevBucketBeforeOpen]?.close
-
-            if (openBucket == closeBucket) {
-                val baseC = existingOpen
-                    ?: fastForexService.buildSingleM1CandleAt(cleanSym, openBucket, trade.openPrice)
-                val barOpen = prevBeforeOpenClose ?: trade.openPrice
-                val barClose = trade.closePrice
-                val wickPad = max(minPoint * 2.0, unitRange * 0.16)
-                bucketMap[openBucket] = baseC.copy(
-                    time = fastForexService.formatCandleTimestamp(openBucket, timeframe),
-                    timestamp = openBucket,
-                    open = barOpen,
-                    close = barClose,
-                    high = max(max(barOpen, barClose) + wickPad, trade.openPrice),
-                    low = min(min(barOpen, barClose) - wickPad, trade.openPrice).coerceAtLeast(minPoint)
+            if (closeBucket < openBucket) closeBucket = openBucket
+            tradeSpans.add(
+                TradeSpan(
+                    openBucket = openBucket,
+                    closeBucket = closeBucket,
+                    openPrice = trade.openPrice,
+                    closePrice = trade.closePrice
                 )
-            } else {
-                val stepCount = ((closeBucket - openBucket) / tfIntervalMs).coerceIn(1L, 45L).toInt()
-                var runningPrevClose = prevBeforeOpenClose ?: trade.openPrice
+            )
+        }
 
-                for (step in 0..stepCount) {
-                    val b = openBucket + step * tfIntervalMs
-                    if (!SriLankaMarketHours.isMarketOpen(b)) continue
-                    val existingBar = bucketMap[b]
-                    if (existingBar != null && step in 1 until stepCount &&
-                        abs(existingBar.close - runningPrevClose) <= unitRange * 3.5
-                    ) {
-                        val connectedOpen = runningPrevClose
-                        val connectedClose = existingBar.close
-                        bucketMap[b] = existingBar.copy(
-                            open = connectedOpen,
-                            high = max(existingBar.high, max(connectedOpen, connectedClose)),
-                            low = min(existingBar.low, min(connectedOpen, connectedClose)).coerceAtLeast(minPoint)
-                        )
-                        runningPrevClose = connectedClose
-                        continue
-                    }
-
-                    val built = fastForexService.buildSingleM1CandleAt(cleanSym, b, runningPrevClose)
-                    val builtBody = built.close - built.open
-                    val frac = if (stepCount > 0) (step + 1).toDouble() / (stepCount + 1).toDouble() else 1.0
-                    val guidePrice = trade.openPrice + (trade.closePrice - trade.openPrice) * frac
-                    val barOpen = runningPrevClose
-                    val barClose = when (step) {
-                        0 -> {
-                            val rawC = trade.openPrice + builtBody * 0.75
-                            if (abs(rawC - barOpen) < minPoint * 2.0) barOpen + minPoint * 3.0 else rawC
-                        }
-                        stepCount -> trade.closePrice
-                        else -> {
-                            val pull = (guidePrice - barOpen) * 0.35
-                            val rawC = barOpen + pull + builtBody * 0.85
-                            if (abs(rawC - barOpen) < minPoint * 2.0) barOpen - minPoint * 3.0 else rawC
-                        }
-                    }
-                    val upWick = (built.high - max(built.open, built.close)).coerceAtLeast(minPoint * 2.0)
-                    val dnWick = (min(built.open, built.close) - built.low).coerceAtLeast(minPoint * 2.0)
-                    var barHigh = max(barOpen, barClose) + upWick
-                    var barLow = (min(barOpen, barClose) - dnWick).coerceAtLeast(minPoint)
-                    if (step == 0) {
-                        barHigh = max(barHigh, trade.openPrice)
-                        barLow = min(barLow, trade.openPrice).coerceAtLeast(minPoint)
-                    }
-                    if (step == stepCount) {
-                        barHigh = max(barHigh, trade.closePrice)
-                        barLow = min(barLow, trade.closePrice).coerceAtLeast(minPoint)
-                    }
-                    bucketMap[b] = Candle(
-                        time = fastForexService.formatCandleTimestamp(b, timeframe),
-                        timestamp = b,
-                        open = barOpen,
-                        high = barHigh,
-                        low = barLow,
-                        close = barClose
-                    )
-                    runningPrevClose = barClose
-                }
+        // Step 1: If any trade starts earlier than the earliest bucket in bucketMap, prepend continuous
+        // open-market buckets back to 45 bars before the earliest trade so there are no missing dates/hours.
+        val earliestTradeBucket = tradeSpans.minOfOrNull { it.openBucket }
+        val currentEarliestBucket = bucketMap.keys.minOrNull()
+        if (earliestTradeBucket != null && currentEarliestBucket != null && earliestTradeBucket < currentEarliestBucket) {
+            var leadStartBucket: Long = earliestTradeBucket
+            for (k in 0 until 45) {
+                leadStartBucket = SriLankaMarketHours.stepBackwardOpenMarketBucket(leadStartBucket, tfIntervalMs)
             }
-
-            // Build surrounding post-trade context (10 bars after closeBucket) if not yet present
-            var postPrevClose = bucketMap[closeBucket]?.close ?: trade.closePrice
-            for (k in 1..10) {
-                val postB = closeBucket + k * tfIntervalMs
-                if (!SriLankaMarketHours.isMarketOpen(postB)) continue
-                val existingNext = bucketMap[postB]
-                if (existingNext != null) {
-                    if (abs(existingNext.open - postPrevClose) <= unitRange * 12.0) {
-                        bucketMap[postB] = existingNext.copy(
-                            open = postPrevClose,
-                            high = max(existingNext.high, max(postPrevClose, existingNext.close)),
-                            low = min(existingNext.low, min(postPrevClose, existingNext.close)).coerceAtLeast(minPoint)
-                        )
-                    }
-                    break
-                }
-                val built = fastForexService.buildSingleM1CandleAt(cleanSym, postB, postPrevClose)
-                val bodyDelta = (built.close - built.open).let {
-                    if (abs(it) < minPoint * 2.0) (if (it >= 0.0) minPoint * 3.0 else -minPoint * 3.0) else it
-                }
-                val barOpen = postPrevClose
-                val barClose = (barOpen + bodyDelta).coerceAtLeast(minPoint * 10.0)
-                val upWick = (built.high - max(built.open, built.close)).coerceAtLeast(minPoint * 2.0)
-                val dnWick = (min(built.open, built.close) - built.low).coerceAtLeast(minPoint * 2.0)
-                bucketMap[postB] = Candle(
-                    time = fastForexService.formatCandleTimestamp(postB, timeframe),
-                    timestamp = postB,
-                    open = barOpen,
-                    high = max(barOpen, barClose) + upWick,
-                    low = (min(barOpen, barClose) - dnWick).coerceAtLeast(minPoint),
-                    close = barClose
+            val missingBefore = SriLankaMarketHours.buildOpenMarketTimestampsBetween(
+                startExclusiveMs = SriLankaMarketHours.stepBackwardOpenMarketBucket(leadStartBucket, tfIntervalMs),
+                endExclusiveMs = currentEarliestBucket,
+                intervalMs = tfIntervalMs,
+                maxSteps = 12_000
+            )
+            if (missingBefore.isNotEmpty()) {
+                val firstTradePrice = tradeSpans.minByOrNull { it.openBucket }?.openPrice
+                    ?: bucketMap[currentEarliestBucket]?.open
+                    ?: fastForexService.getDefaultPrice(cleanSym)
+                val endAnchorPrice = bucketMap[currentEarliestBucket]?.open ?: firstTradePrice
+                val bridgedPre = fastForexService.buildConnectedCandleBridge(
+                    symbol = cleanSym,
+                    timeframe = timeframe,
+                    openBuckets = missingBefore,
+                    startPrice = firstTradePrice,
+                    endPrice = endAnchorPrice
                 )
-                postPrevClose = barClose
+                for (c in bridgedPre) {
+                    if (!bucketMap.containsKey(c.timestamp)) {
+                        bucketMap[c.timestamp] = c
+                    }
+                }
             }
         }
 
-        // 2. Anchor running open positions for this symbol without overwriting the candle's open price
+        // Step 2: Sort buckets chronologically and fill any internal open-market timestamp gaps
+        val sortedInitial = bucketMap.values.sortedBy { it.timestamp }
+        val continuousList = ArrayList<Candle>(sortedInitial.size + 256)
+        for (c in sortedInitial) {
+            val prev = continuousList.lastOrNull()
+            if (prev != null && timeframe.minutes < Timeframe.D1.minutes) {
+                val gapBuckets = SriLankaMarketHours.buildOpenMarketTimestampsBetween(
+                    startExclusiveMs = prev.timestamp,
+                    endExclusiveMs = c.timestamp,
+                    intervalMs = tfIntervalMs,
+                    maxSteps = 8_000
+                )
+                if (gapBuckets.isNotEmpty()) {
+                    val bridged = fastForexService.buildConnectedCandleBridge(
+                        symbol = cleanSym,
+                        timeframe = timeframe,
+                        openBuckets = gapBuckets,
+                        startPrice = prev.close,
+                        endPrice = c.open
+                    )
+                    continuousList.addAll(bridged)
+                }
+            }
+            continuousList.add(c)
+        }
+
+        if (continuousList.isEmpty()) return baseCandles
+
+        val indexByBucket = HashMap<Long, Int>(continuousList.size * 2)
+        for (i in continuousList.indices) {
+            indexByBucket[continuousList[i].timestamp] = i
+        }
+
+        val isTradeLocked = BooleanArray(continuousList.size)
+
+        // Step 3: Anchor each trade's [openBucket..closeBucket] with realistic alternating candles
+        for (span in tradeSpans) {
+            val openIdx = indexByBucket[span.openBucket] ?: continue
+            val closeIdx = indexByBucket[span.closeBucket] ?: openIdx
+            val safeCloseIdx = max(openIdx, closeIdx)
+
+            if (openIdx == safeCloseIdx) {
+                val existing = continuousList[openIdx]
+                val barOpen = span.openPrice
+                val barClose = span.closePrice
+                val bodyTop = max(barOpen, barClose)
+                val bodyBot = min(barOpen, barClose)
+                val wickPad = max(minPoint * 2.0, unitRange * 0.22)
+                continuousList[openIdx] = existing.copy(
+                    open = barOpen,
+                    close = barClose,
+                    high = max(bodyTop + wickPad, span.openPrice),
+                    low = min(bodyBot - wickPad, span.openPrice).coerceAtLeast(minPoint)
+                )
+                isTradeLocked[openIdx] = true
+            } else {
+                val count = safeCloseIdx - openIdx + 1
+                val subBuckets = LongArray(count) { k -> continuousList[openIdx + k].timestamp }
+                val bridgedTrade = fastForexService.buildConnectedCandleBridge(
+                    symbol = cleanSym,
+                    timeframe = timeframe,
+                    openBuckets = subBuckets,
+                    startPrice = span.openPrice,
+                    endPrice = span.closePrice
+                )
+                for (k in bridgedTrade.indices) {
+                    val targetIdx = openIdx + k
+                    var bar = bridgedTrade[k]
+                    if (k == 0) {
+                        bar = bar.copy(
+                            open = span.openPrice,
+                            high = max(bar.high, max(span.openPrice, bar.close)),
+                            low = min(bar.low, min(span.openPrice, bar.close)).coerceAtLeast(minPoint)
+                        )
+                    }
+                    if (k == bridgedTrade.lastIndex) {
+                        bar = bar.copy(
+                            close = span.closePrice,
+                            high = max(bar.high, max(bar.open, span.closePrice)),
+                            low = min(bar.low, min(bar.open, span.closePrice)).coerceAtLeast(minPoint)
+                        )
+                    }
+                    continuousList[targetIdx] = bar
+                    isTradeLocked[targetIdx] = true
+                }
+            }
+        }
+
+        // Step 4: Smoothly bridge lead-in before first trade, gaps between trades, and transition after last trade
+        val lockedRanges = ArrayList<IntRange>()
+        var idx = 0
+        while (idx < continuousList.size) {
+            if (isTradeLocked[idx]) {
+                val start = idx
+                while (idx + 1 < continuousList.size && isTradeLocked[idx + 1]) {
+                    idx++
+                }
+                lockedRanges.add(start..idx)
+            }
+            idx++
+        }
+
+        if (lockedRanges.isNotEmpty() && timeframe.minutes < Timeframe.D1.minutes) {
+            // 4a. Bridge lead-in before the very first locked trade range
+            val firstRange = lockedRanges.first()
+            val firstIdx = firstRange.first
+            if (firstIdx > 0) {
+                val targetOpen = continuousList[firstIdx].open
+                val prevClose = continuousList[firstIdx - 1].close
+                val priceGap = abs(targetOpen - prevClose)
+                if (priceGap > minPoint * 2.0) {
+                    val neededLead = (priceGap / (unitRange * 0.55)).toInt().coerceIn(25, 240)
+                    val leadStart = max(0, firstIdx - neededLead)
+                    val leadCount = firstIdx - leadStart
+                    if (leadCount > 0) {
+                        val leadBuckets = LongArray(leadCount) { k -> continuousList[leadStart + k].timestamp }
+                        val leadStartPrice = if (leadStart == 0) {
+                            fastForexService.deterministicCloseAtBucket(
+                                symbol = cleanSym,
+                                timeframe = timeframe,
+                                bucketTimestampMs = SriLankaMarketHours.stepBackwardOpenMarketBucket(leadBuckets[0], tfIntervalMs),
+                                customAnchorPrice = targetOpen
+                            )
+                        } else {
+                            continuousList[leadStart - 1].close
+                        }
+                        val bridgedLead = fastForexService.buildConnectedCandleBridge(
+                            symbol = cleanSym,
+                            timeframe = timeframe,
+                            openBuckets = leadBuckets,
+                            startPrice = leadStartPrice,
+                            endPrice = targetOpen
+                        )
+                        for (k in bridgedLead.indices) {
+                            continuousList[leadStart + k] = bridgedLead[k]
+                        }
+                    }
+                }
+            }
+
+            // 4b. Bridge between consecutive locked trade ranges
+            for (rIdx in 0 until lockedRanges.size - 1) {
+                val curRange = lockedRanges[rIdx]
+                val nextRange = lockedRanges[rIdx + 1]
+                val gapStart = curRange.last + 1
+                val gapEnd = nextRange.first - 1
+                val startP = continuousList[curRange.last].close
+                val endP = continuousList[nextRange.first].open
+
+                if (gapStart > gapEnd) {
+                    // Adjacent locked ranges: connect nextRange.first.open to curRange.last.close
+                    val nextBar = continuousList[nextRange.first]
+                    continuousList[nextRange.first] = nextBar.copy(
+                        open = startP,
+                        high = max(nextBar.high, max(startP, nextBar.close)),
+                        low = min(nextBar.low, min(startP, nextBar.close)).coerceAtLeast(minPoint)
+                    )
+                } else {
+                    val gapCount = gapEnd - gapStart + 1
+                    val gapBuckets = LongArray(gapCount) { k -> continuousList[gapStart + k].timestamp }
+                    val bridgedMid = fastForexService.buildConnectedCandleBridge(
+                        symbol = cleanSym,
+                        timeframe = timeframe,
+                        openBuckets = gapBuckets,
+                        startPrice = startP,
+                        endPrice = endP
+                    )
+                    for (k in bridgedMid.indices) {
+                        continuousList[gapStart + k] = bridgedMid[k]
+                    }
+                }
+            }
+
+            // 4c. Bridge transition after the final locked trade range into the subsequent market series
+            val lastRange = lockedRanges.last()
+            val lastLockedIdx = lastRange.last
+            if (lastLockedIdx < continuousList.lastIndex) {
+                val startP = continuousList[lastLockedIdx].close
+                val nextOpen = continuousList[lastLockedIdx + 1].open
+                val priceGap = abs(nextOpen - startP)
+                if (priceGap > minPoint * 2.0) {
+                    val availableAfter = continuousList.lastIndex - lastLockedIdx
+                    val neededAfter = (priceGap / (unitRange * 0.55)).toInt().coerceIn(25, 300)
+                    val bridgeCount = min(availableAfter, neededAfter)
+                    if (bridgeCount > 0) {
+                        val postStart = lastLockedIdx + 1
+                        val postEnd = postStart + bridgeCount - 1
+                        val targetEndPrice = if (postEnd < continuousList.lastIndex) {
+                            continuousList[postEnd + 1].open
+                        } else {
+                            continuousList.last().close
+                        }
+                        val postBuckets = LongArray(bridgeCount) { k -> continuousList[postStart + k].timestamp }
+                        val bridgedPost = fastForexService.buildConnectedCandleBridge(
+                            symbol = cleanSym,
+                            timeframe = timeframe,
+                            openBuckets = postBuckets,
+                            startPrice = startP,
+                            endPrice = targetEndPrice
+                        )
+                        for (k in bridgedPost.indices) {
+                            continuousList[postStart + k] = bridgedPost[k]
+                        }
+                    }
+                }
+            }
+        }
+
+        // Step 5: Anchor running open positions for this symbol
         for (pos in symbolPositions) {
             val rawOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(pos.openTime)
             if (rawOpenMs <= 0L) continue
             val clampedOpenMs = SriLankaMarketHours.clampToLastOpenMarketTimestamp(rawOpenMs)
             val openBucket = (clampedOpenMs / tfIntervalMs) * tfIntervalMs
-            val existing = bucketMap[openBucket]
-            if (existing != null && abs(existing.close - pos.openPrice) <= unitRange * 12.0) {
-                bucketMap[openBucket] = existing.copy(
-                    high = max(existing.high, pos.openPrice),
-                    low = min(existing.low, pos.openPrice).coerceAtLeast(minPoint)
-                )
-            } else if (existing == null && openBucket < earliestRealBucket) {
-                val built = fastForexService.buildSingleM1CandleAt(cleanSym, openBucket, pos.openPrice)
-                bucketMap[openBucket] = built.copy(
-                    high = max(built.high, pos.openPrice),
-                    low = min(built.low, pos.openPrice).coerceAtLeast(minPoint)
-                )
+            val posIdx = indexByBucket[openBucket]
+            if (posIdx != null) {
+                val existing = continuousList[posIdx]
+                if (abs(existing.close - pos.openPrice) <= unitRange * 15.0) {
+                    continuousList[posIdx] = existing.copy(
+                        high = max(existing.high, pos.openPrice),
+                        low = min(existing.low, pos.openPrice).coerceAtLeast(minPoint)
+                    )
+                }
             }
         }
 
-        return bucketMap.values.sortedBy { it.timestamp }
+        // Final continuity pass for intraday candles
+        if (timeframe.minutes < Timeframe.D1.minutes && continuousList.size > 1) {
+            for (i in 1 until continuousList.size) {
+                val prevClose = continuousList[i - 1].close
+                val cur = continuousList[i]
+                if (cur.open != prevClose && abs(cur.open - prevClose) <= unitRange * 15.0) {
+                    continuousList[i] = cur.copy(
+                        open = prevClose,
+                        high = max(cur.high, max(prevClose, cur.close)),
+                        low = min(cur.low, min(prevClose, cur.close)).coerceAtLeast(minPoint)
+                    )
+                }
+            }
+        }
+
+        return continuousList
     }
 
     /**
@@ -1220,16 +1331,7 @@ class TradingRepository(private val scope: CoroutineScope) {
             val anchor = m1List?.minByOrNull { abs(it.timestamp - minuteBucketMs) }?.close
                 ?: quote?.bid
                 ?: fastForexService.getDefaultPrice(cleanSym)
-            val built = fastForexService.buildSingleM1CandleAt(cleanSym, minuteBucketMs, anchor)
-            if (m1List != null) {
-                val updated = (m1List + built).sortedBy { it.timestamp }.toMutableList()
-                candleMap[m1Key] = updated
-                if (cleanSym == currentActiveSymbol && currentActiveTimeframe == Timeframe.M1) {
-                    candleAggregator.seedHistory(updated)
-                    _selectedPairCandles.value = candleAggregator.getCandles()
-                }
-            }
-            built
+            fastForexService.buildSingleM1CandleAt(cleanSym, minuteBucketMs, anchor)
         }
 
         // Deterministic intra-minute price movement path across seconds :00 .. :59
@@ -2049,7 +2151,6 @@ class TradingRepository(private val scope: CoroutineScope) {
                 if (savedCandles.isNotEmpty()) {
                     hasSavedCandlesForSymbol = true
                     val key = cacheKey(sym, tf)
-                    loaded14DayKeys.add(key)
                     candleMap[key] = savedCandles.toMutableList()
                     if (sym == currentActiveSymbol && tf == currentActiveTimeframe) {
                         candleAggregator.seedHistory(savedCandles)

@@ -104,6 +104,65 @@ object SriLankaMarketHours {
     }
 
     /**
+     * Steps forward by [intervalMs] from [currentTimestampMs], automatically skipping the closed
+     * weekend window (Saturday 02:30 AM .. Monday 03:29:59 AM Sri Lanka Time).
+     */
+    fun stepForwardOpenMarketBucket(currentTimestampMs: Long, intervalMs: Long): Long {
+        val safeStep = intervalMs.coerceAtLeast(60_000L)
+        var candidate = ((currentTimestampMs + safeStep) / safeStep) * safeStep
+        if (isMarketOpen(candidate)) {
+            return candidate
+        }
+        val cal = Calendar.getInstance(SRI_LANKA_TIME_ZONE, Locale.US)
+        cal.timeInMillis = candidate
+        while (!isMarketOpen(cal.timeInMillis)) {
+            val dayOfWeek = cal.get(Calendar.DAY_OF_WEEK)
+            when (dayOfWeek) {
+                Calendar.SATURDAY -> cal.add(Calendar.DAY_OF_YEAR, 2)
+                Calendar.SUNDAY -> cal.add(Calendar.DAY_OF_YEAR, 1)
+                else -> {}
+            }
+            cal.set(Calendar.HOUR_OF_DAY, 3)
+            cal.set(Calendar.MINUTE, 30)
+            cal.set(Calendar.SECOND, 0)
+            cal.set(Calendar.MILLISECOND, 0)
+            if (!isMarketOpen(cal.timeInMillis)) {
+                cal.add(Calendar.MINUTE, 1)
+            }
+        }
+        candidate = (cal.timeInMillis / safeStep) * safeStep
+        while (!isMarketOpen(candidate) || candidate <= currentTimestampMs) {
+            candidate += safeStep
+        }
+        return candidate
+    }
+
+    /**
+     * Returns all open-market bucket timestamps strictly between [startExclusiveMs] and [endExclusiveMs]
+     * (`startExclusiveMs < ts < endExclusiveMs`), up to [maxSteps] buckets.
+     */
+    fun buildOpenMarketTimestampsBetween(
+        startExclusiveMs: Long,
+        endExclusiveMs: Long,
+        intervalMs: Long,
+        maxSteps: Int = 15_000
+    ): LongArray {
+        val safeStep = intervalMs.coerceAtLeast(60_000L)
+        if (endExclusiveMs - startExclusiveMs <= safeStep) return LongArray(0)
+        val list = ArrayList<Long>(minOf(maxSteps, ((endExclusiveMs - startExclusiveMs) / safeStep).toInt().coerceAtLeast(1)))
+        var cur = stepForwardOpenMarketBucket(startExclusiveMs, safeStep)
+        while (cur < endExclusiveMs && list.size < maxSteps) {
+            if (isMarketOpen(cur)) {
+                list.add(cur)
+            }
+            val next = stepForwardOpenMarketBucket(cur, safeStep)
+            if (next <= cur) break
+            cur = next
+        }
+        return list.toLongArray()
+    }
+
+    /**
      * Generates a chronological list of [count] open-market candle bucket timestamps ending at [nowMs],
      * strictly within Monday 03:30 AM .. Saturday 02:29 AM Sri Lanka Time.
      */

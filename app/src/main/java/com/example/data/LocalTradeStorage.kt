@@ -329,7 +329,7 @@ class LocalTradeStorage(context: Context) {
 
     fun saveCandles(symbol: String, timeframe: String, candles: List<com.example.model.Candle>) {
         if (candles.isEmpty()) return
-        val recent = candles.takeLast(600)
+        val recent = candles.takeLast(3000)
         val arr = JSONArray()
         for (c in recent) {
             if (c.timestamp <= 0L) continue
@@ -400,7 +400,7 @@ class LocalTradeStorage(context: Context) {
         private const val KEY_ACTIVE_ACCOUNT_KEY = "active_account_key_v1"
         private const val KEY_NEXT_ID = "next_position_id"
         private const val KEY_SEEDED_DEFAULT_HISTORY = "seeded_default_history_v1"
-        private const val KEY_CANDLES_PREFIX = "chart_candles_real_v6_"
+        private const val KEY_CANDLES_PREFIX = "chart_candles_real_v7_"
         private const val KEY_CHART_HISTORY_MOVE_ENABLED = "chart_history_move_enabled"
     }
 }
