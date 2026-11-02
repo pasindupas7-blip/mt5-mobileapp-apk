@@ -587,6 +587,12 @@ class TradingRepository(private val scope: CoroutineScope) {
     private val _chartHistoryMoveEnabled = MutableStateFlow(true)
     val chartHistoryMoveEnabled: StateFlow<Boolean> = _chartHistoryMoveEnabled.asStateFlow()
 
+    private val _showChartGrid = MutableStateFlow(true)
+    val showChartGrid: StateFlow<Boolean> = _showChartGrid.asStateFlow()
+
+    private val _showSymbolDescription = MutableStateFlow(true)
+    val showSymbolDescription: StateFlow<Boolean> = _showSymbolDescription.asStateFlow()
+
     val fastForexService: FastForexService = FastForexService.getInstance()
     val marketDataService: MarketDataService = MarketDataService.getInstance()
     private val candleAggregator = CandleAggregator(Timeframe.M5)
@@ -783,6 +789,16 @@ class TradingRepository(private val scope: CoroutineScope) {
     fun setChartHistoryMoveEnabled(enabled: Boolean) {
         _chartHistoryMoveEnabled.value = enabled
         localStorage?.saveChartHistoryMoveEnabled(enabled)
+    }
+
+    fun setChartGridEnabled(enabled: Boolean) {
+        _showChartGrid.value = enabled
+        localStorage?.saveChartGridEnabled(enabled)
+    }
+
+    fun setSymbolDescriptionEnabled(enabled: Boolean) {
+        _showSymbolDescription.value = enabled
+        localStorage?.saveChartSymbolDescriptionEnabled(enabled)
     }
 
     fun setSelectedSymbol(symbol: String) {
@@ -2070,6 +2086,8 @@ class TradingRepository(private val scope: CoroutineScope) {
         val local = LocalTradeStorage(appContext)
         localStorage = local
         _chartHistoryMoveEnabled.value = local.loadChartHistoryMoveEnabled()
+        _showChartGrid.value = local.loadChartGridEnabled()
+        _showSymbolDescription.value = local.loadChartSymbolDescriptionEnabled()
 
         // 1. Restore all accounts and each account's isolated positions & history from local storage
         val savedAccounts = local.loadAccountsList()

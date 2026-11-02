@@ -159,6 +159,7 @@ private class ChartGestureMetrics {
     var gridSpanPx: Float = 900f
     var topGridPriceVal: Double = 0.0
     var totalGridPriceSpanVal: Double = 1.0
+    var gridAnchorPrice: Double = 0.0
     var hoveredCandleIndex: Int = -1
     val renderedHistoryMarkers = mutableListOf<RenderedHistoryMarker>()
     val renderedRunningPositions = mutableListOf<RenderedRunningPositionMarker>()
@@ -358,6 +359,8 @@ fun CandlestickChart(
     showMA: Boolean = false,
     maPeriod: Int = 20,
     showCrosshair: Boolean = false,
+    showGrid: Boolean = true,
+    showSymbolDescription: Boolean = true,
     fit14DaysMode: Boolean = false,
     onFit14DaysChange: ((Boolean) -> Unit)? = null,
     enableHistoryTradeMove: Boolean = true,
@@ -1053,11 +1056,11 @@ fun CandlestickChart(
                                         velocityTracker.addPosition(primaryChange.uptimeMillis, primaryChange.position)
                                     }
                                 }
-                                if (abs(panChange.y) > 0.5f && priceAxisZoom > 1.15f && down.position.y < metrics.chartHeightPx) {
+                                if (abs(panChange.y) > 0.3f && down.position.y < metrics.chartHeightPx) {
                                     val priceDelta = (panChange.y / metrics.gridSpanPx.coerceAtLeast(1f)) * metrics.totalGridPriceSpanVal
                                     verticalPanPriceOffset = (verticalPanPriceOffset + priceDelta).coerceIn(
-                                        -metrics.totalGridPriceSpanVal * 1.5,
-                                        metrics.totalGridPriceSpanVal * 1.5
+                                        -metrics.totalGridPriceSpanVal * 1.2,
+                                        metrics.totalGridPriceSpanVal * 1.2
                                     )
                                 }
                                 event.changes.forEach { if (it.positionChanged()) it.consume() }
@@ -1286,6 +1289,9 @@ fun CandlestickChart(
             metrics.gridSpanPx = gridSpanPx
             metrics.topGridPriceVal = topGridPrice
             metrics.totalGridPriceSpanVal = totalGridPriceSpan
+            if (metrics.gridAnchorPrice == 0.0 || (abs(clampedPan) < 0.5f && abs(verticalPanPriceOffset) < 1e-7)) {
+                metrics.gridAnchorPrice = topGridPrice
+            }
 
             fun priceToY(price: Double): Float {
                 val ratio = (topGridPrice - price) / totalGridPriceSpan
@@ -1299,24 +1305,35 @@ fun CandlestickChart(
 
             val gridDash = PathEffect.dashPathEffect(floatArrayOf(3.5.dp.toPx(), 3.5.dp.toPx()), 0f)
 
-            // Draw horizontal dashed price grid lines and crisp right-axis price labels
+            // Draw horizontal dashed price grid lines (moving smoothly with vertical & horizontal chart movement)
+            // and crisp right-axis price labels
             val rowSpacingPx = gridSpanPx / (numHorizontalLines - 1).toFloat()
-            for (row in -1..numHorizontalLines) {
-                val priceAtRow = topGridPrice - row * exactPriceStep
-                val y = topGridMargin + rowSpacingPx * row
+            val rawRowShift = if (exactPriceStep > 0.0) {
+                (topGridPrice - metrics.gridAnchorPrice) / exactPriceStep
+            } else {
+                0.0
+            }
+            val baseRowShift = floor(rawRowShift).toInt()
+            val subRowOffsetPx = ((rawRowShift - baseRowShift.toDouble()) * rowSpacingPx.toDouble()).toFloat()
+
+            for (row in -2..(numHorizontalLines + 1)) {
+                val y = topGridMargin + row * rowSpacingPx + subRowOffsetPx
                 if (y < 2.dp.toPx() || y > chartHeight - 2.dp.toPx()) continue
 
-                drawLine(
-                    color = gridColor,
-                    start = Offset(0f, y),
-                    end = Offset(chartWidth, y),
-                    strokeWidth = 0.85.dp.toPx(),
-                    pathEffect = gridDash
-                )
+                if (showGrid) {
+                    drawLine(
+                        color = gridColor,
+                        start = Offset(0f, y),
+                        end = Offset(chartWidth, y),
+                        strokeWidth = 0.85.dp.toPx(),
+                        pathEffect = gridDash
+                    )
+                }
 
-                if (row in 0 until numHorizontalLines) {
+                val priceAtRow = yToPrice(y)
+                val labelY = y - 6.5.dp.toPx()
+                if (labelY >= 1.dp.toPx() && labelY <= chartHeight - 16.dp.toPx()) {
                     val priceStr = String.format(Locale.US, "%.${quote.digits}f", priceAtRow)
-                    val labelY = (y - 6.5.dp.toPx()).coerceIn(1.dp.toPx(), chartHeight - 16.dp.toPx())
                     drawText(
                         textMeasurer = textMeasurer,
                         text = priceStr,
@@ -1330,25 +1347,28 @@ fun CandlestickChart(
                 }
             }
 
-            // Draw 11 vertical dashed time grid lines (col = 0..10) and bottom-axis timestamps on col = 0, 3, 6, 9:
-            // As the user pinches 2 fingers together/apart (`zoomScale` / `totalCandleSlot`), the timestamps at
-            // col = 0, 3, 6, 9 dynamically zoom in and out just like in 876703870, 873921828, 866472779, 875028027, 869442267.
+            // Draw vertical dashed time grid lines and bottom-axis timestamps moving smoothly with clampedPan
             val lastCandleTs = displayCandles.last().timestamp
             val firstCandleTs = displayCandles.first().timestamp
+            val baseGridX = firstVertGridX + clampedPan
+            val minCol = floor((-baseGridX) / vertGridSpacingPx).toInt() - 1
+            val maxCol = ceil((chartWidth - baseGridX) / vertGridSpacingPx).toInt() + 1
 
-            for (col in 0 until numVertGridCols) {
-                val x = firstVertGridX + col * vertGridSpacingPx
+            for (col in minCol..maxCol) {
+                val x = baseGridX + col * vertGridSpacingPx
                 if (x < 1.dp.toPx() || x > chartWidth - 1.dp.toPx()) continue
 
-                drawLine(
-                    color = gridColor,
-                    start = Offset(x, 0f),
-                    end = Offset(x, chartHeight),
-                    strokeWidth = 0.85.dp.toPx(),
-                    pathEffect = gridDash
-                )
+                if (showGrid) {
+                    drawLine(
+                        color = gridColor,
+                        start = Offset(x, 0f),
+                        end = Offset(x, chartHeight),
+                        strokeWidth = 0.85.dp.toPx(),
+                        pathEffect = gridDash
+                    )
+                }
 
-                if (col % 3 == 0) {
+                if (col.mod(3) == 0) {
                     val gridCandleIdx = kotlin.math.round(
                         (n - 1).toFloat() - ((candleOriginX + clampedPan - x) / totalCandleSlot)
                     ).toInt()
@@ -2178,13 +2198,16 @@ fun CandlestickChart(
                     lineHeight = 16.sp
                 )
             }
-            Text(
-                text = quote.description,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Normal,
-                color = primaryTextCol,
-                lineHeight = 15.sp
-            )
+            if (showSymbolDescription && quote.description.isNotBlank()) {
+                Text(
+                    text = quote.description,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = primaryTextCol,
+                    lineHeight = 15.sp,
+                    modifier = Modifier.testTag("chart_symbol_description_text")
+                )
+            }
             if (hoveredCandle != null) {
                 Text(
                     text = "O: %.${quote.digits}f  H: %.${quote.digits}f  L: %.${quote.digits}f  C: %.${quote.digits}f".format(

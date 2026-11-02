@@ -84,6 +84,8 @@ fun SettingsScreen(
     val isCloudSynced by viewModel.isCloudSynced.collectAsState()
     val currentUserEmail by viewModel.currentUserEmail.collectAsState()
     val chartHistoryMoveEnabled by viewModel.chartHistoryMoveEnabled.collectAsState()
+    val showChartGrid by viewModel.showChartGrid.collectAsState()
+    val showSymbolDescription by viewModel.showSymbolDescription.collectAsState()
     var showEditAccountDialog by remember { mutableStateOf(false) }
 
     if (showEditAccountDialog) {
@@ -317,6 +319,138 @@ fun SettingsScreen(
                 ) {
                     Text(
                         text = if (chartHistoryMoveEnabled) "ON" else "OFF",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    )
+                }
+            }
+
+            HorizontalDivider(thickness = 0.5.dp, color = MT5Separator, modifier = Modifier.padding(start = 52.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { viewModel.toggleChartGrid() }
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .testTag("settings_chart_grid_toggle_row"),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (showChartGrid) MT5Green else Color(0xFF8E8E93)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CandlestickChart,
+                        contentDescription = "Chart Grid",
+                        tint = Color.White,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Chart Grid",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MT5TextPrimary
+                    )
+                    Text(
+                        text = if (showChartGrid) {
+                            "ON • Grid visible & moves with chart"
+                        } else {
+                            "OFF • Chart grid lines hidden"
+                        },
+                        fontSize = 12.sp,
+                        color = MT5TextSecondary,
+                        maxLines = 1,
+                        modifier = Modifier.padding(top = 1.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Surface(
+                    color = if (showChartGrid) Color(0xFF198754) else Color(0xFF6C757D),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .clickable { viewModel.toggleChartGrid() }
+                        .testTag("settings_chart_grid_button")
+                ) {
+                    Text(
+                        text = if (showChartGrid) "ON" else "OFF",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                    )
+                }
+            }
+
+            HorizontalDivider(thickness = 0.5.dp, color = MT5Separator, modifier = Modifier.padding(start = 52.dp))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { viewModel.toggleSymbolDescription() }
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .testTag("settings_chart_symbol_desc_toggle_row"),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (showSymbolDescription) MT5Green else Color(0xFF8E8E93)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Language,
+                        contentDescription = "Chart Symbol Description",
+                        tint = Color.White,
+                        modifier = Modifier.size(17.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Chart Symbol Description",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MT5TextPrimary
+                    )
+                    Text(
+                        text = if (showSymbolDescription) {
+                            "ON • Show 'Gold Spot (1 Lot = 100 oz)' below symbol"
+                        } else {
+                            "OFF • Hide description below symbol on chart"
+                        },
+                        fontSize = 12.sp,
+                        color = MT5TextSecondary,
+                        maxLines = 1,
+                        modifier = Modifier.padding(top = 1.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Surface(
+                    color = if (showSymbolDescription) Color(0xFF198754) else Color(0xFF6C757D),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .clickable { viewModel.toggleSymbolDescription() }
+                        .testTag("settings_chart_symbol_desc_button")
+                ) {
+                    Text(
+                        text = if (showSymbolDescription) "ON" else "OFF",
                         color = Color.White,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,

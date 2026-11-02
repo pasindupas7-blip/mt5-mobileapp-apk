@@ -58,6 +58,8 @@ class TradingViewModel @JvmOverloads constructor(
     val isCloudSynced: StateFlow<Boolean> = repository.isCloudSynced
     val currentUserEmail: StateFlow<String?> = repository.currentUserEmail
     val chartHistoryMoveEnabled: StateFlow<Boolean> = repository.chartHistoryMoveEnabled
+    val showChartGrid: StateFlow<Boolean> = repository.showChartGrid
+    val showSymbolDescription: StateFlow<Boolean> = repository.showSymbolDescription
 
     private val _currentTab = MutableStateFlow(MT5Tab.QUOTES)
     val currentTab: StateFlow<MT5Tab> = _currentTab.asStateFlow()
@@ -151,6 +153,40 @@ class TradingViewModel @JvmOverloads constructor(
         showNotification(
             if (enabled) "Chart Trade History Move: ON"
             else "Chart Trade History Move: OFF"
+        )
+    }
+
+    fun toggleChartGrid() {
+        val next = !showChartGrid.value
+        repository.setChartGridEnabled(next)
+        showNotification(
+            if (next) "Chart Grid: ON"
+            else "Chart Grid: OFF"
+        )
+    }
+
+    fun setChartGridEnabled(enabled: Boolean) {
+        repository.setChartGridEnabled(enabled)
+        showNotification(
+            if (enabled) "Chart Grid: ON"
+            else "Chart Grid: OFF"
+        )
+    }
+
+    fun toggleSymbolDescription() {
+        val next = !showSymbolDescription.value
+        repository.setSymbolDescriptionEnabled(next)
+        showNotification(
+            if (next) "Chart Symbol Description: ON"
+            else "Chart Symbol Description: OFF"
+        )
+    }
+
+    fun setSymbolDescriptionEnabled(enabled: Boolean) {
+        repository.setSymbolDescriptionEnabled(enabled)
+        showNotification(
+            if (enabled) "Chart Symbol Description: ON"
+            else "Chart Symbol Description: OFF"
         )
     }
 

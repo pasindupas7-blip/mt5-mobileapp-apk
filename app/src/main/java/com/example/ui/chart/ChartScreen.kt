@@ -94,6 +94,8 @@ fun ChartScreen(
     val showQuickTradeBar by viewModel.showQuickTradeBar.collectAsState()
     val fit14DaysMode by viewModel.fit14DaysMode.collectAsState()
     val chartHistoryMoveEnabled by viewModel.chartHistoryMoveEnabled.collectAsState()
+    val showChartGrid by viewModel.showChartGrid.collectAsState()
+    val showSymbolDescription by viewModel.showSymbolDescription.collectAsState()
 
     val symbolPositions = remember(positions, selectedQuote?.symbol) {
         positions.filter { it.symbol.equals(selectedQuote?.symbol, ignoreCase = true) }
@@ -354,6 +356,8 @@ fun ChartScreen(
                     showMA = showMA,
                     maPeriod = 20,
                     showCrosshair = showCrosshair,
+                    showGrid = showChartGrid,
+                    showSymbolDescription = showSymbolDescription,
                     fit14DaysMode = fit14DaysMode,
                     onFit14DaysChange = { viewModel.setFit14DaysMode(it) },
                     enableHistoryTradeMove = chartHistoryMoveEnabled,
@@ -493,6 +497,77 @@ fun ChartScreen(
                                 viewModel.toggleQuickTradeBar()
                                 showMoreMenu = false
                             }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = "Chart Grid",
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Surface(
+                                        color = if (showChartGrid) Color(0xFF198754) else Color(0xFF6C757D),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.padding(start = 12.dp)
+                                    ) {
+                                        Text(
+                                            text = if (showChartGrid) "ON" else "OFF",
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                viewModel.toggleChartGrid()
+                                showMoreMenu = false
+                            },
+                            modifier = Modifier.testTag("chart_more_grid_toggle")
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f, fill = false)) {
+                                        Text(
+                                            text = "Symbol Description",
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            text = q.description,
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF6C757D)
+                                        )
+                                    }
+                                    Surface(
+                                        color = if (showSymbolDescription) Color(0xFF198754) else Color(0xFF6C757D),
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.padding(start = 12.dp)
+                                    ) {
+                                        Text(
+                                            text = if (showSymbolDescription) "ON" else "OFF",
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
+                                        )
+                                    }
+                                }
+                            },
+                            onClick = {
+                                viewModel.toggleSymbolDescription()
+                                showMoreMenu = false
+                            },
+                            modifier = Modifier.testTag("chart_more_symbol_desc_toggle")
                         )
                         DropdownMenuItem(
                             text = { Text("New Order (with SL / TP)") },

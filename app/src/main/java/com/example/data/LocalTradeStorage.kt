@@ -387,6 +387,22 @@ class LocalTradeStorage(context: Context) {
         return prefs.getBoolean(KEY_CHART_HISTORY_MOVE_ENABLED, true)
     }
 
+    fun saveChartGridEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_CHART_GRID_ENABLED, enabled).apply()
+    }
+
+    fun loadChartGridEnabled(): Boolean {
+        return prefs.getBoolean(KEY_CHART_GRID_ENABLED, true)
+    }
+
+    fun saveChartSymbolDescriptionEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_CHART_SYMBOL_DESC_ENABLED, enabled).apply()
+    }
+
+    fun loadChartSymbolDescriptionEnabled(): Boolean {
+        return prefs.getBoolean(KEY_CHART_SYMBOL_DESC_ENABLED, true)
+    }
+
     fun clearAll() {
         prefs.edit().clear().apply()
     }
@@ -402,5 +418,7 @@ class LocalTradeStorage(context: Context) {
         private const val KEY_SEEDED_DEFAULT_HISTORY = "seeded_default_history_v1"
         private const val KEY_CANDLES_PREFIX = "chart_candles_real_v7_"
         private const val KEY_CHART_HISTORY_MOVE_ENABLED = "chart_history_move_enabled"
+        private const val KEY_CHART_GRID_ENABLED = "chart_grid_enabled"
+        private const val KEY_CHART_SYMBOL_DESC_ENABLED = "chart_symbol_desc_enabled"
     }
 }
