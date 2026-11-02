@@ -416,7 +416,7 @@ class LocalTradeStorage(context: Context) {
         private const val KEY_ACTIVE_ACCOUNT_KEY = "active_account_key_v1"
         private const val KEY_NEXT_ID = "next_position_id"
         private const val KEY_SEEDED_DEFAULT_HISTORY = "seeded_default_history_v1"
-        private const val KEY_CANDLES_PREFIX = "chart_candles_real_v7_"
+        private const val KEY_CANDLES_PREFIX = "chart_candles_real_v8_"
         private const val KEY_CHART_HISTORY_MOVE_ENABLED = "chart_history_move_enabled"
         private const val KEY_CHART_GRID_ENABLED = "chart_grid_enabled"
         private const val KEY_CHART_SYMBOL_DESC_ENABLED = "chart_symbol_desc_enabled"

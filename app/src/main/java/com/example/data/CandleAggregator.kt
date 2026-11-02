@@ -180,5 +180,8 @@ class CandleAggregator(
     }
 
     @Synchronized
-    fun getCandles(): List<Candle> = candles.toList()
+    fun getCandleCount(): Int = candles.size
+
+    @Synchronized
+    fun getCandles(): List<Candle> = ArrayList(candles)
 }
