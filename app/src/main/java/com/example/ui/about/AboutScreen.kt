@@ -81,7 +81,9 @@ data class AboutTradeEntry(
     val tp: Double?,
     val ticketId: String,
     val isRunning: Boolean,
-    val hitOutcome: TradeHitOutcome = TradeHitOutcome.NONE
+    val hitOutcome: TradeHitOutcome = TradeHitOutcome.NONE,
+    val commission: Double = 0.0,
+    val swap: Double = 0.0
 )
 
 @Composable
@@ -363,6 +365,9 @@ fun TradeHistoryControlSection(
     var depositInput by remember(account.deposit) {
         mutableStateOf(String.format(Locale.US, "%.2f", account.deposit))
     }
+    var depositDateInput by remember(account.depositDate) {
+        mutableStateOf(account.depositDate.ifBlank { "2026.08.10 09:00:00" })
+    }
     var statusBanner by remember { mutableStateOf<String?>(null) }
 
     // Combine closed trades and running open positions, ordered chronologically from OLDEST (#1) to NEWEST (#N)
@@ -384,7 +389,9 @@ fun TradeHistoryControlSection(
                     tp = t.tp,
                     ticketId = t.ticketId,
                     isRunning = false,
-                    hitOutcome = viewModel.resolveTradeHitOutcome(t)
+                    hitOutcome = viewModel.resolveTradeHitOutcome(t),
+                    commission = t.commission,
+                    swap = t.swap
                 )
             }
         val runningEntries = positions.map { p ->
@@ -402,7 +409,9 @@ fun TradeHistoryControlSection(
                 tp = p.tp,
                 ticketId = "#${if (p.id >= 100000000L) p.id else 385000000L + p.id}",
                 isRunning = true,
-                hitOutcome = TradeHitOutcome.NONE
+                hitOutcome = TradeHitOutcome.NONE,
+                commission = p.commission,
+                swap = p.swap
             )
         }
         (closedEntries + runningEntries).sortedWith(
@@ -664,38 +673,108 @@ fun TradeHistoryControlSection(
                     .fillMaxWidth()
                     .border(1.dp, MtDivider, RoundedCornerShape(8.dp))
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(10.dp)
                 ) {
-                    OutlinedTextField(
-                        value = depositInput,
-                        onValueChange = { depositInput = it },
-                        label = { Text("Base Deposit ($)", fontSize = 12.sp) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("about_deposit_input")
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            val parsed = depositInput.toDoubleOrNull()
-                            if (parsed != null && parsed >= 0.0) {
-                                viewModel.setDepositAmount(parsed)
-                                statusBanner = String.format(Locale.US, "Deposit updated to $%.2f & synced", parsed)
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MtBlue),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier
-                            .height(48.dp)
-                            .testTag("save_deposit_button")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Update Deposit", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        OutlinedTextField(
+                            value = depositInput,
+                            onValueChange = { depositInput = it },
+                            label = { Text("Base Deposit ($)", fontSize = 12.sp) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("about_deposit_input")
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                val parsed = depositInput.toDoubleOrNull()
+                                if (parsed != null && parsed >= 0.0) {
+                                    val cleanDepositDate = depositDateInput.trim().ifBlank { "2026.08.10 09:00:00" }
+                                    viewModel.setDepositAmount(parsed, cleanDepositDate)
+                                    statusBanner = String.format(
+                                        Locale.US,
+                                        "Deposit updated to $%.2f (%s) & synced",
+                                        parsed,
+                                        cleanDepositDate
+                                    )
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MtBlue),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .height(48.dp)
+                                .testTag("save_deposit_button")
+                        ) {
+                            Text("Update Deposit", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = depositDateInput,
+                        onValueChange = { depositDateInput = it },
+                        label = { Text("Deposit Date/Time (yyyy.MM.dd HH:mm:ss)", fontSize = 12.sp) },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("about_deposit_date_input")
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Quick Date:",
+                            color = MtGrayText,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Surface(
+                            color = Color.White,
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier
+                                .border(1.dp, MtDivider, RoundedCornerShape(6.dp))
+                                .clickable {
+                                    depositDateInput = "2026.08.10 09:00:00"
+                                }
+                        ) {
+                            Text(
+                                text = "Initial (2026.08.10)",
+                                color = MtDarkText,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                        Surface(
+                            color = Color.White,
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier
+                                .border(1.dp, MtDivider, RoundedCornerShape(6.dp))
+                                .clickable {
+                                    depositDateInput = SriLankaMarketHours.formatDateTime()
+                                }
+                        ) {
+                            Text(
+                                text = "Today / Now",
+                                color = MtBlueText,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -763,7 +842,7 @@ fun TradeHistoryControlSection(
             initialTrade = editingTradeEntry,
             viewModel = viewModel,
             onDismiss = { showTradeDialog = false },
-            onSaveHistoryTrade = { existingId, symbol, isBuy, lots, openPrice, closePrice, openTime, closeTime, sl, tp, customProfit, customTicketId, hitOutcome ->
+            onSaveHistoryTrade = { existingId, symbol, isBuy, lots, openPrice, closePrice, openTime, closeTime, sl, tp, customProfit, customTicketId, hitOutcome, customCommission, customSwap ->
                 viewModel.saveOrUpdateHistoryTrade(
                     existingId = existingId,
                     symbol = symbol,
@@ -777,7 +856,9 @@ fun TradeHistoryControlSection(
                     tp = tp,
                     customProfit = customProfit,
                     customTicketId = customTicketId,
-                    hitOutcome = hitOutcome
+                    hitOutcome = hitOutcome,
+                    customCommission = customCommission,
+                    customSwap = customSwap
                 )
                 showTradeDialog = false
                 val hitLabel = when (hitOutcome) {
@@ -977,6 +1058,12 @@ private fun EditableTradeHistoryRow(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                Text(
+                    text = "Swap: ${String.format(Locale.US, "%.2f", trade.swap)} | Comm: ${String.format(Locale.US, "%.2f", trade.commission)}",
+                    color = MtGrayText,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
             }
 
             Column(horizontalAlignment = Alignment.End) {
@@ -1139,7 +1226,9 @@ private fun TradeHistoryEditDialog(
         tp: Double?,
         customProfit: Double?,
         customTicketId: String?,
-        hitOutcome: TradeHitOutcome
+        hitOutcome: TradeHitOutcome,
+        customCommission: Double?,
+        customSwap: Double?
     ) -> Unit,
     onSaveRunningTrade: (
         existingId: Long?,
@@ -1154,7 +1243,8 @@ private fun TradeHistoryEditDialog(
     ) -> Unit
 ) {
     val quotes by viewModel.quotes.collectAsState()
-    val initialSymbol = initialTrade?.symbol ?: "NDX100"
+    val rawInitSym = initialTrade?.symbol ?: "NAS100"
+    val initialSymbol = if (rawInitSym.equals("NDX100", ignoreCase = true)) "NAS100" else rawInitSym
     val initialBuy = initialTrade?.isBuy ?: true
 
     val initialRecentM1 = remember(initialSymbol) {
@@ -1340,9 +1430,54 @@ private fun TradeHistoryEditDialog(
         }
     }
 
+    val calculatedCommission = remember(symbol, lotsText, isRunningTrade) {
+        val lots = (lotsText.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0)
+        viewModel.calculateCommissionUsd(
+            symbol = symbol.trim().uppercase(Locale.US),
+            lots = lots,
+            isOpenOnly = isRunningTrade
+        )
+    }
+
+    val calculatedSwap = remember(symbol, isBuy, lotsText, openTimeText, closeTimeText, isRunningTrade) {
+        val lots = (lotsText.toDoubleOrNull() ?: 0.0).coerceAtLeast(0.0)
+        val effectiveClose = if (isRunningTrade || closeTimeText.isBlank()) defaultNow else closeTimeText
+        viewModel.calculateSwapUsd(
+            symbol = symbol.trim().uppercase(Locale.US),
+            isBuy = isBuy,
+            lots = lots,
+            openTimeStr = openTimeText,
+            closeTimeStr = effectiveClose
+        )
+    }
+
+    val rolloverDaysCount = remember(openTimeText, closeTimeText, isRunningTrade) {
+        val effectiveClose = if (isRunningTrade || closeTimeText.isBlank()) defaultNow else closeTimeText
+        viewModel.calculateRolloverSwapDays(openTimeText, effectiveClose)
+    }
+
+    var useAutoCommissionAndSwap by remember { mutableStateOf(true) }
+    var manualCommissionText by remember {
+        mutableStateOf(
+            initialTrade?.let { String.format(Locale.US, "%.2f", it.commission) } ?: "0.00"
+        )
+    }
+    var manualSwapText by remember {
+        mutableStateOf(
+            initialTrade?.let { String.format(Locale.US, "%.2f", it.swap) } ?: "0.00"
+        )
+    }
+
     LaunchedEffect(calculatedProfit, useAutoProfit) {
         if (useAutoProfit) {
             manualProfitText = String.format(Locale.US, "%.2f", calculatedProfit)
+        }
+    }
+
+    LaunchedEffect(calculatedCommission, calculatedSwap, useAutoCommissionAndSwap) {
+        if (useAutoCommissionAndSwap) {
+            manualCommissionText = String.format(Locale.US, "%.2f", calculatedCommission)
+            manualSwapText = String.format(Locale.US, "%.2f", calculatedSwap)
         }
     }
 
@@ -1375,7 +1510,10 @@ private fun TradeHistoryEditDialog(
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    listOf("NDX100", "XAUUSD", "EURUSD", "BTCUSD", "GBPUSD", "USDJPY").forEach { preset ->
+                    listOf(
+                        "XAUUSD", "USDSEK", "USDJPY", "USDCNH", "USDCHF",
+                        "USDCAD", "NZDUSD", "NAS100", "GBPUSD", "EURUSD", "AUDUSD"
+                    ).forEach { preset ->
                         val selected = symbol.equals(preset, ignoreCase = true)
                         Surface(
                             color = if (selected) MtBlue else Color(0xFFF1F3F4),
@@ -1421,7 +1559,7 @@ private fun TradeHistoryEditDialog(
                         symbol = upper
                         syncPricesToSymbolAndTimes(upper, isBuy)
                     },
-                    label = { Text("Symbol (e.g. NDX100, XAUUSD)") },
+                    label = { Text("Symbol (e.g. XAUUSD, NAS100, EURUSD)") },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1665,11 +1803,16 @@ private fun TradeHistoryEditDialog(
                             if (closeCandleLookup != null) {
                                 TextButton(
                                     onClick = {
-                                        closeTimeText = closeCandleLookup.suggestedTimestamp
+                                        val freshLookup = viewModel.lookupMinuteChartCandle(
+                                            symbol,
+                                            closeTimeText.trim().take(16),
+                                            isOpen = false
+                                        ) ?: closeCandleLookup
+                                        closeTimeText = freshLookup.suggestedTimestamp
                                         closePriceText = String.format(
                                             Locale.US,
-                                            "%.${closeCandleLookup.digits}f",
-                                            closeCandleLookup.priceAtSecond
+                                            "%.${freshLookup.digits}f",
+                                            freshLookup.priceAtSecond
                                         )
                                     },
                                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
@@ -1784,6 +1927,68 @@ private fun TradeHistoryEditDialog(
                             .testTag("dialog_trade_profit")
                     )
 
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val brokerLabel = if (viewModel.isFusionBroker()) {
+                        "Fusion Markets ($4.50/lot)"
+                    } else {
+                        "Moneta Markets ($6.00/lot)"
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = useAutoCommissionAndSwap,
+                            onCheckedChange = { useAutoCommissionAndSwap = it }
+                        )
+                        Column {
+                            Text(
+                                text = "Auto Commission & Swap ($brokerLabel)",
+                                color = MtDarkText,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Comm: $${String.format(Locale.US, "%.2f", calculatedCommission)} • Swap: $${String.format(Locale.US, "%.2f", calculatedSwap)} ($rolloverDaysCount rollover day${if (rolloverDaysCount == 1) "" else "s"}, 3x Wed)",
+                                color = MtGrayText,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = manualCommissionText,
+                            onValueChange = {
+                                useAutoCommissionAndSwap = false
+                                manualCommissionText = it
+                            },
+                            label = { Text("Commission USD") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("dialog_trade_commission")
+                        )
+                        OutlinedTextField(
+                            value = manualSwapText,
+                            onValueChange = {
+                                useAutoCommissionAndSwap = false
+                                manualSwapText = it
+                            },
+                            label = { Text("Swap USD") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("dialog_trade_swap")
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(12.dp))
 
                     // =========================================================================
@@ -1864,7 +2069,7 @@ private fun TradeHistoryEditDialog(
                     Spacer(modifier = Modifier.width(8.dp))
                     Button(
                         onClick = {
-                            val cleanSymbol = symbol.trim().uppercase(Locale.US).ifEmpty { "NDX100" }
+                            val cleanSymbol = symbol.trim().uppercase(Locale.US).ifEmpty { "NAS100" }
                             val lots = (lotsText.toDoubleOrNull() ?: 0.01).coerceAtLeast(0.01)
                             val fallbackOpen = activeSymbolQuote?.let {
                                 if (isBuy) it.ask else it.bid
@@ -1912,6 +2117,16 @@ private fun TradeHistoryEditDialog(
                                 } else {
                                     manualProfitText.toDoubleOrNull() ?: calculatedProfit
                                 }
+                                val finalCommission = if (useAutoCommissionAndSwap) {
+                                    calculatedCommission
+                                } else {
+                                    manualCommissionText.toDoubleOrNull() ?: calculatedCommission
+                                }
+                                val finalSwap = if (useAutoCommissionAndSwap) {
+                                    calculatedSwap
+                                } else {
+                                    manualSwapText.toDoubleOrNull() ?: calculatedSwap
+                                }
                                 onSaveHistoryTrade(
                                     initialTrade?.id,
                                     cleanSymbol,
@@ -1925,7 +2140,9 @@ private fun TradeHistoryEditDialog(
                                     tpText.toDoubleOrNull(),
                                     finalProfit,
                                     formattedTicket,
-                                    selectedHitOutcome
+                                    selectedHitOutcome,
+                                    finalCommission,
+                                    finalSwap
                                 )
                             }
                         },

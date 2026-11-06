@@ -46,7 +46,9 @@ data class TradePosition(
     val sl: Double? = null,
     val tp: Double? = null,
     val profit: Double = 0.0,
-    val openTime: String
+    val openTime: String,
+    val commission: Double = 0.0,
+    val swap: Double = 0.0
 )
 
 enum class TradeHitOutcome {
@@ -97,6 +99,7 @@ data class AccountInfo(
     val serverName: String = "AS08, Hedge",
     val isReal: Boolean = true,
     val deposit: Double = 500.00,
+    val depositDate: String = "2026.08.10 09:00:00",
     val realizedProfit: Double = 24.74,
     val totalWithdrawal: Double = 0.00,
     val totalSwap: Double = 0.00,

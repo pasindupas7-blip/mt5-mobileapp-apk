@@ -133,19 +133,16 @@ class FastForexService private constructor(
     private val dateFormatLock = Any()
 
     private val allWatchlistSymbols = listOf(
-        "EURUSD", "GBPUSD", "USDCHF", "USDJPY", "USDCAD",
-        "AUDUSD", "NZDUSD", "AUDNZD", "AUDCAD",
-        "XAUUSD", "NDX100", "BTCUSD",
-        "AUDCHF", "AUDJPY", "CADCHF", "CADJPY", "CHFJPY", "EURAUD"
+        "XAUUSD", "USDSEK", "USDJPY", "USDCNH", "USDCHF",
+        "USDCAD", "NZDUSD", "NAS100", "GBPUSD", "EURUSD", "AUDUSD"
     )
 
     init {
         val clampedNow = SriLankaMarketHours.clampToLastOpenMarketTimestamp(SriLankaMarketHours.chartNowMillis())
         val currentM1Bucket = (clampedNow / 60_000L) * 60_000L
         val allStartupSymbols = listOf(
-            "INRUSD", "EURUSD", "GBPUSD", "USDCHF", "USDJPY", "USDCAD",
-            "AUDUSD", "NZDUSD", "AUDNZD", "AUDCAD", "NDX100", "XAUUSD",
-            "AUDCHF", "AUDJPY", "CADCHF", "CADJPY", "CHFJPY", "EURAUD", "BTCUSD"
+            "XAUUSD", "USDSEK", "USDJPY", "USDCNH", "USDCHF",
+            "USDCAD", "NZDUSD", "NAS100", "GBPUSD", "EURUSD", "AUDUSD"
         )
         for (sym in allStartupSymbols) {
             val initPrice = if (sym == "INRUSD") {
@@ -414,7 +411,7 @@ class FastForexService private constructor(
 
     private fun toYahooTicker(symbol: String): String {
         return when (val norm = normalizeSymbol(symbol)) {
-            "NDX100" -> "^NDX"
+            "NAS100", "NDX100" -> "^NDX"
             "XAUUSD" -> "GC=F"
             "BTCUSD" -> "BTC-USD"
             else -> "$norm=X"
@@ -502,11 +499,11 @@ class FastForexService private constructor(
 
         // 2. Also query FastForex multi-endpoint if configured
         val pairsByBase = mapOf(
-            "AUD" to listOf("CAD", "CHF", "JPY", "NZD", "USD"),
-            "CAD" to listOf("CHF", "JPY"),
-            "CHF" to listOf("JPY"),
-            "EUR" to listOf("USD", "AUD"),
-            "GBP" to listOf("USD")
+            "USD" to listOf("SEK", "JPY", "CNH", "CHF", "CAD"),
+            "NZD" to listOf("USD"),
+            "GBP" to listOf("USD"),
+            "EUR" to listOf("USD"),
+            "AUD" to listOf("USD")
         )
 
         for ((base, targets) in pairsByBase) {
@@ -632,7 +629,8 @@ class FastForexService private constructor(
     }
 
     fun normalizeSymbol(symbol: String): String {
-        return symbol.replace("/", "").replace(":", "").trim().uppercase()
+        val clean = symbol.replace("/", "").replace(":", "").trim().uppercase(Locale.US)
+        return if (clean == "NDX100") "NAS100" else clean
     }
 
     private fun getSpread(symbol: String): Double {
@@ -643,12 +641,14 @@ class FastForexService private constructor(
             "USDCHF" -> 0.00003
             "USDJPY" -> 0.001
             "USDCAD" -> 0.00002
+            "USDSEK" -> 0.00030
+            "USDCNH" -> 0.00025
             "AUDUSD" -> 0.00002
             "NZDUSD" -> 0.00001
             "AUDNZD" -> 0.00010
             "AUDCAD" -> 0.00009
             else -> when {
-                symbol.contains("NDX") -> 1.50
+                symbol.contains("NAS") || symbol.contains("NDX") -> 1.50
                 symbol.contains("XAU") -> 0.30
                 symbol.contains("BTC") -> 3.50
                 symbol.endsWith("JPY") -> 0.002
@@ -660,7 +660,7 @@ class FastForexService private constructor(
     fun getMinPoint(symbol: String): Double {
         return when {
             symbol.equals("INRUSD", ignoreCase = true) -> 0.0000001
-            symbol.contains("NDX") -> 0.01
+            symbol.contains("NAS") || symbol.contains("NDX") -> 0.01
             symbol.contains("XAU") -> 0.01
             symbol.contains("BTC") -> 0.50
             symbol.endsWith("JPY") -> 0.001
@@ -673,9 +673,11 @@ class FastForexService private constructor(
      */
     fun getNaturalM1Range(symbol: String): Double {
         return when {
-            symbol.contains("NDX") -> 14.50
+            symbol.contains("NAS") || symbol.contains("NDX") -> 14.50
             symbol.contains("XAU") -> 1.80
             symbol.contains("BTC") -> 65.0
+            symbol.endsWith("SEK") -> 0.00450
+            symbol.endsWith("CNH") -> 0.00220
             symbol.endsWith("JPY") -> 0.040
             else -> 0.00040
         }
@@ -695,8 +697,10 @@ class FastForexService private constructor(
 
     fun getCanonicalBasePrice(symbol: String): Double {
         return when (normalizeSymbol(symbol)) {
-            "NDX100" -> 29763.58
+            "NAS100", "NDX100" -> 29763.58
             "XAUUSD" -> 4001.44
+            "USDSEK" -> 10.68450
+            "USDCNH" -> 7.24680
             "BTCUSD" -> 81850.00
             "INRUSD" -> 0.0105271
             "EURUSD" -> 1.12198

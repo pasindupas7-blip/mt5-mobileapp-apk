@@ -2696,8 +2696,8 @@ fun CandlestickChart(
 
                                             val origOpenMs = com.example.data.SriLankaMarketHours.parseMt5DateTimeMillis(latestEdit.originalTrade.openTime)
                                             val origCloseMs = com.example.data.SriLankaMarketHours.parseMt5DateTimeMillis(latestEdit.originalTrade.closeTime)
-                                            val openSec = if (origOpenMs > 0L) (origOpenMs / 1000L % 60L).coerceIn(2L, 55L) else 12L
-                                            val closeSec = if (origCloseMs > 0L) (origCloseMs / 1000L % 60L).coerceIn(2L, 58L) else 44L
+                                            val openSec = if (origOpenMs > 0L) (origOpenMs / 1000L % 60L).coerceIn(2L, 54L) else (5..24).random().toLong()
+                                            val prevCloseSec = if (origCloseMs > 0L) (origCloseMs / 1000L % 60L) else -1L
 
                                             val openCandleBaseMs = (curCandles[safeOpenIdx].timestamp / 60_000L) * 60_000L
                                             val closeCandleBaseMs = (curCandles[safeCloseIdx].timestamp / 60_000L) * 60_000L
@@ -2706,12 +2706,16 @@ fun CandlestickChart(
                                             val newCloseMs: Long
                                             if (closeCandleBaseMs <= openCandleBaseMs) {
                                                 val s1 = min(openSec, 22L)
-                                                val s2 = max(closeSec, s1 + 18L).coerceAtMost(58L)
+                                                val minS2 = (s1 + 4L).coerceAtMost(56L).toInt()
+                                                val candidates = (minS2..58).filter { it.toLong() != prevCloseSec && it.toLong() != s1 }
+                                                val s2 = (if (candidates.isNotEmpty()) candidates.random() else (minS2..58).random()).toLong()
                                                 newOpenMs = openCandleBaseMs + s1 * 1000L
                                                 newCloseMs = openCandleBaseMs + s2 * 1000L
                                             } else {
+                                                val candidates = (1..58).filter { it.toLong() != prevCloseSec && it.toLong() != openSec }
+                                                val randomCloseSec = (if (candidates.isNotEmpty()) candidates.random() else (1..58).random()).toLong()
                                                 newOpenMs = openCandleBaseMs + openSec * 1000L
-                                                newCloseMs = closeCandleBaseMs + closeSec * 1000L
+                                                newCloseMs = closeCandleBaseMs + randomCloseSec * 1000L
                                             }
 
                                             val newOpenTimeStr = com.example.data.SriLankaMarketHours.formatHistoryTimestamp(newOpenMs)

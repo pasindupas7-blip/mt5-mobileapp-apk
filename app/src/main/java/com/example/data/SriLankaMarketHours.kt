@@ -247,21 +247,127 @@ object SriLankaMarketHours {
     }
 
     /**
+     * Formats a timestamp in "dd/MM/yyyy" using Sri Lanka Standard Time for MT5 History period subtitles & inputs.
+     */
+    fun formatHistoryPeriodDate(timestampMs: Long = System.currentTimeMillis()): String {
+        val sdf = SimpleDateFormat("dd/MM/yyyy", Locale.US)
+        sdf.timeZone = SRI_LANKA_TIME_ZONE
+        return sdf.format(Date(timestampMs))
+    }
+
+    /**
+     * Parses a user-entered date string ("dd/MM/yyyy", "d/M/yyyy", "dd.MM.yyyy", "yyyy.MM.dd", "dd-MM-yyyy")
+     * in Sri Lanka Standard Time into epoch milliseconds (at 00:00:00.000 of that day), or null if invalid.
+     */
+    fun parseCustomPeriodDateMillis(dateStr: String): Long? {
+        val clean = dateStr.trim()
+        if (clean.isEmpty()) return null
+        val patterns = listOf(
+            "dd/MM/yyyy",
+            "d/M/yyyy",
+            "dd.MM.yyyy",
+            "d.M.yyyy",
+            "dd-MM-yyyy",
+            "yyyy.MM.dd",
+            "yyyy-MM-dd",
+            "yyyy/MM/dd"
+        )
+        for (pattern in patterns) {
+            try {
+                val sdf = SimpleDateFormat(pattern, Locale.US).apply {
+                    timeZone = SRI_LANKA_TIME_ZONE
+                    isLenient = false
+                }
+                val parsed = sdf.parse(clean)
+                if (parsed != null) {
+                    val cal = Calendar.getInstance(SRI_LANKA_TIME_ZONE, Locale.US)
+                    cal.timeInMillis = parsed.time
+                    val year = cal.get(Calendar.YEAR)
+                    if (year in 1990..2100) {
+                        cal.set(Calendar.HOUR_OF_DAY, 0)
+                        cal.set(Calendar.MINUTE, 0)
+                        cal.set(Calendar.SECOND, 0)
+                        cal.set(Calendar.MILLISECOND, 0)
+                        return cal.timeInMillis
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return null
+    }
+
+    /**
+     * Returns the dynamically calculated subtitle ("dd/MM/yyyy" or "dd/MM/yyyy - dd/MM/yyyy")
+     * for the given MT5 HistoryPeriod based on the current date.
+     */
+    fun getHistoryPeriodSubtitle(
+        periodName: String,
+        nowMs: Long = System.currentTimeMillis()
+    ): String? {
+        val endCal = Calendar.getInstance(SRI_LANKA_TIME_ZONE, Locale.US).apply {
+            timeInMillis = nowMs
+        }
+        val endStr = formatHistoryPeriodDate(endCal.timeInMillis)
+
+        val startCal = Calendar.getInstance(SRI_LANKA_TIME_ZONE, Locale.US).apply {
+            timeInMillis = nowMs
+        }
+        return when (periodName) {
+            "TODAY" -> endStr
+            "LAST_WEEK" -> {
+                startCal.add(Calendar.DAY_OF_YEAR, -7)
+                "${formatHistoryPeriodDate(startCal.timeInMillis)} - $endStr"
+            }
+            "LAST_MONTH" -> {
+                startCal.add(Calendar.MONTH, -1)
+                "${formatHistoryPeriodDate(startCal.timeInMillis)} - $endStr"
+            }
+            "LAST_3_MONTHS" -> {
+                startCal.add(Calendar.MONTH, -3)
+                "${formatHistoryPeriodDate(startCal.timeInMillis)} - $endStr"
+            }
+            else -> null
+        }
+    }
+
+    /**
      * Checks whether a trade/withdrawal timestamp string falls within the selected MT5 HistoryPeriod
-     * relative to current Sri Lanka Standard Time (or the MT5 reference date 2026.10.25).
+     * relative to current Sri Lanka Standard Time, or within [customStartMs]..[customEndMs] when CUSTOM.
      */
     fun isWithinHistoryPeriod(
         dateStr: String,
         periodName: String,
-        nowMs: Long = chartNowMillis()
+        nowMs: Long = System.currentTimeMillis(),
+        customStartMs: Long? = null,
+        customEndMs: Long? = null
     ): Boolean {
-        if (periodName == "CUSTOM") return true
         val itemMs = parseMt5DateTimeMillis(dateStr)
         if (itemMs <= 0L) return true
 
-        val ref2026Ms = parseMt5DateTimeMillis("2026.10.25 23:59:59")
-        return matchesPeriodAnchor(itemMs, periodName, nowMs) ||
-            (ref2026Ms > 0L && matchesPeriodAnchor(itemMs, periodName, ref2026Ms))
+        if (periodName == "CUSTOM") {
+            if (customStartMs == null || customEndMs == null) return true
+            val minDay = minOf(customStartMs, customEndMs)
+            val maxDay = maxOf(customStartMs, customEndMs)
+
+            val startCal = Calendar.getInstance(SRI_LANKA_TIME_ZONE, Locale.US).apply {
+                timeInMillis = minDay
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }
+            val endCal = Calendar.getInstance(SRI_LANKA_TIME_ZONE, Locale.US).apply {
+                timeInMillis = maxDay
+                set(Calendar.HOUR_OF_DAY, 23)
+                set(Calendar.MINUTE, 59)
+                set(Calendar.SECOND, 59)
+                set(Calendar.MILLISECOND, 999)
+            }
+            return itemMs in startCal.timeInMillis..endCal.timeInMillis
+        }
+
+        return matchesPeriodAnchor(itemMs, periodName, nowMs)
     }
 
     private fun matchesPeriodAnchor(itemMs: Long, periodName: String, anchorMs: Long): Boolean {
@@ -297,6 +403,6 @@ object SriLankaMarketHours {
         }
 
         val startMs = startCal.timeInMillis
-        return itemMs in startMs..(endOfAnchorDayMs + 86_400_000L)
+        return itemMs in startMs..endOfAnchorDayMs
     }
 }

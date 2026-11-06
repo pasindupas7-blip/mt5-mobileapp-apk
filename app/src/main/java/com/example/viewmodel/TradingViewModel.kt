@@ -16,6 +16,8 @@ import com.example.model.TpSlChartCheckResult
 import com.example.model.TradeHitOutcome
 import com.example.model.TradePosition
 import com.example.ui.components.MT5Tab
+import com.example.ui.history.HistoryPeriod
+import com.example.ui.history.HistorySegment
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -110,6 +112,25 @@ class TradingViewModel @JvmOverloads constructor(
 
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
+
+    // Persistent History screen states across navigation (defaulting to LAST_WEEK on app start)
+    private val _historySelectedPeriod = MutableStateFlow(HistoryPeriod.LAST_WEEK)
+    val historySelectedPeriod: StateFlow<HistoryPeriod> = _historySelectedPeriod.asStateFlow()
+
+    private val _historyCustomStartDateMs = MutableStateFlow(0L)
+    val historyCustomStartDateMs: StateFlow<Long> = _historyCustomStartDateMs.asStateFlow()
+
+    private val _historyCustomEndDateMs = MutableStateFlow(0L)
+    val historyCustomEndDateMs: StateFlow<Long> = _historyCustomEndDateMs.asStateFlow()
+
+    private val _historyActiveSegment = MutableStateFlow(HistorySegment.POSITIONS)
+    val historyActiveSegment: StateFlow<HistorySegment> = _historyActiveSegment.asStateFlow()
+
+    private val _historySortAscending = MutableStateFlow(true)
+    val historySortAscending: StateFlow<Boolean> = _historySortAscending.asStateFlow()
+
+    private val _historyExpandedTradeIds = MutableStateFlow<Set<Long>>(emptySet())
+    val historyExpandedTradeIds: StateFlow<Set<Long>> = _historyExpandedTradeIds.asStateFlow()
 
     init {
         repository.setSelectedSymbol("XAUUSD")
@@ -210,6 +231,33 @@ class TradingViewModel @JvmOverloads constructor(
     ) {
         val key = "${symbol.uppercase(Locale.US)}_${timeframeLabel.uppercase(Locale.US)}"
         chartViewportMap[key] = state
+    }
+
+    fun setHistorySelectedPeriod(period: HistoryPeriod) {
+        _historySelectedPeriod.value = period
+    }
+
+    fun setHistoryCustomDateRange(startMs: Long, endMs: Long) {
+        _historyCustomStartDateMs.value = minOf(startMs, endMs)
+        _historyCustomEndDateMs.value = maxOf(startMs, endMs)
+        _historySelectedPeriod.value = HistoryPeriod.CUSTOM
+    }
+
+    fun setHistoryActiveSegment(segment: HistorySegment) {
+        _historyActiveSegment.value = segment
+    }
+
+    fun toggleHistorySortOrder() {
+        _historySortAscending.value = !_historySortAscending.value
+    }
+
+    fun toggleHistoryExpandedTradeId(tradeId: Long) {
+        val current = _historyExpandedTradeIds.value
+        _historyExpandedTradeIds.value = if (tradeId in current) {
+            current - tradeId
+        } else {
+            current + tradeId
+        }
     }
 
     fun signInWithGoogle(activityContext: Context) {
@@ -445,6 +493,40 @@ class TradingViewModel @JvmOverloads constructor(
         return repository.calculateHistoricalTradeProfit(symbol, isBuy, lots, openPrice, closePrice)
     }
 
+    fun calculateCommissionUsd(
+        symbol: String,
+        lots: Double,
+        isOpenOnly: Boolean = false
+    ): Double {
+        return repository.calculateCommissionUsd(symbol, lots, isOpenOnly)
+    }
+
+    fun calculateSwapUsd(
+        symbol: String,
+        isBuy: Boolean,
+        lots: Double,
+        openTimeStr: String,
+        closeTimeStr: String
+    ): Double {
+        return repository.calculateSwapUsd(symbol, isBuy, lots, openTimeStr, closeTimeStr)
+    }
+
+    fun calculateRolloverSwapDays(openTimeStr: String, closeTimeStr: String): Int {
+        return repository.calculateRolloverSwapDays(openTimeStr, closeTimeStr)
+    }
+
+    fun getBrokerRoundTurnCommissionRate(symbol: String): Double {
+        return repository.getBrokerRoundTurnCommissionRate(symbol)
+    }
+
+    fun getDailySwapRatePerLot(symbol: String, isBuy: Boolean): Double {
+        return repository.getDailySwapRatePerLot(symbol, isBuy)
+    }
+
+    fun isFusionBroker(): Boolean {
+        return repository.isFusionBroker()
+    }
+
     fun saveOrUpdateRunningPosition(
         existingId: Long? = null,
         symbol: String,
@@ -489,7 +571,9 @@ class TradingViewModel @JvmOverloads constructor(
         tp: Double? = null,
         customProfit: Double? = null,
         customTicketId: String? = null,
-        hitOutcome: TradeHitOutcome? = null
+        hitOutcome: TradeHitOutcome? = null,
+        customCommission: Double? = null,
+        customSwap: Double? = null
     ) {
         val saved = repository.saveOrUpdateHistoryTrade(
             existingId = existingId,
@@ -504,7 +588,9 @@ class TradingViewModel @JvmOverloads constructor(
             tp = tp,
             customProfit = customProfit,
             customTicketId = customTicketId,
-            hitOutcome = hitOutcome
+            hitOutcome = hitOutcome,
+            customCommission = customCommission,
+            customSwap = customSwap
         )
         showNotification("Trade ${saved.ticketId} (${saved.symbol}) saved & synced to Cloud")
     }
@@ -531,8 +617,8 @@ class TradingViewModel @JvmOverloads constructor(
         showNotification("History record removed & synced to Cloud")
     }
 
-    fun setDepositAmount(newDeposit: Double) {
-        repository.setDepositAmount(newDeposit)
+    fun setDepositAmount(newDeposit: Double, newDepositDate: String? = null) {
+        repository.setDepositAmount(newDeposit, newDepositDate)
         showNotification("Deposit updated to $${String.format(Locale.US, "%.2f", newDeposit)} USD")
     }
 

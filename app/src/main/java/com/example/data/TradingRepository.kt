@@ -16,6 +16,7 @@ import com.example.model.TradePosition
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
@@ -40,20 +41,132 @@ class TradingRepository(private val scope: CoroutineScope) {
         timeZone = SriLankaMarketHours.SRI_LANKA_TIME_ZONE
     }
 
-    // Initial Quotes ordered to match the MT5 Android Quotes screen screenshots
+    // Initial Quotes ordered to match the Fusion Markets & Moneta Markets chart/symbol list
     private val initialQuotes = listOf(
         SymbolQuote(
-            symbol = "EURUSD",
-            description = "Euro vs US Dollar",
+            symbol = "XAUUSD",
+            description = "Gold Spot (1 Lot = 100 oz)",
+            digits = 2,
+            bid = 4001.44,
+            ask = 4001.59,
+            low = 3981.96,
+            high = 4017.86,
+            changePoints = -698,
+            changePercent = -0.42,
+            spread = 15,
+            time = "06:09:08",
+            tickDirection = TickDirection.DOWN,
+            bidDirection = TickDirection.DOWN,
+            askDirection = TickDirection.DOWN
+        ),
+        SymbolQuote(
+            symbol = "USDSEK",
+            description = "US Dollar vs Swedish Krona",
             digits = 5,
-            bid = 1.12198,
-            ask = 1.12200,
-            low = 1.12022,
-            high = 1.12267,
-            changePoints = 259,
-            changePercent = 0.23,
-            spread = 2,
+            bid = 10.68450,
+            ask = 10.68480,
+            low = 10.64120,
+            high = 10.71240,
+            changePoints = 412,
+            changePercent = 0.39,
+            spread = 30,
+            time = "06:09:08",
+            tickDirection = TickDirection.UP,
+            bidDirection = TickDirection.UP,
+            askDirection = TickDirection.UP
+        ),
+        SymbolQuote(
+            symbol = "USDJPY",
+            description = "US Dollar vs Japanese Yen",
+            digits = 3,
+            bid = 156.813,
+            ask = 156.814,
+            low = 156.652,
+            high = 157.220,
+            changePoints = 185,
+            changePercent = 0.12,
+            spread = 1,
             time = "06:09:06",
+            tickDirection = TickDirection.UP,
+            bidDirection = TickDirection.UP,
+            askDirection = TickDirection.UP
+        ),
+        SymbolQuote(
+            symbol = "USDCNH",
+            description = "US Dollar vs Chinese Yuan",
+            digits = 5,
+            bid = 7.24680,
+            ask = 7.24705,
+            low = 7.23410,
+            high = 7.25890,
+            changePoints = 215,
+            changePercent = 0.30,
+            spread = 25,
+            time = "06:09:08",
+            tickDirection = TickDirection.UP,
+            bidDirection = TickDirection.UP,
+            askDirection = TickDirection.UP
+        ),
+        SymbolQuote(
+            symbol = "USDCHF",
+            description = "US Dollar vs Swiss Franc",
+            digits = 5,
+            bid = 0.82374,
+            ask = 0.82377,
+            low = 0.82321,
+            high = 0.82522,
+            changePoints = 158,
+            changePercent = 0.19,
+            spread = 3,
+            time = "06:09:06",
+            tickDirection = TickDirection.UP,
+            bidDirection = TickDirection.UP,
+            askDirection = TickDirection.UP
+        ),
+        SymbolQuote(
+            symbol = "USDCAD",
+            description = "US Dollar vs Canadian Dollar",
+            digits = 5,
+            bid = 1.40054,
+            ask = 1.40056,
+            low = 1.39987,
+            high = 1.40435,
+            changePoints = -41,
+            changePercent = -0.03,
+            spread = 2,
+            time = "06:09:10",
+            tickDirection = TickDirection.DOWN,
+            bidDirection = TickDirection.DOWN,
+            askDirection = TickDirection.DOWN
+        ),
+        SymbolQuote(
+            symbol = "NZDUSD",
+            description = "New Zealand Dollar vs US Dollar",
+            digits = 5,
+            bid = 0.57025,
+            ask = 0.57026,
+            low = 0.56953,
+            high = 0.57072,
+            changePoints = -35,
+            changePercent = -0.06,
+            spread = 1,
+            time = "06:09:06",
+            tickDirection = TickDirection.DOWN,
+            bidDirection = TickDirection.DOWN,
+            askDirection = TickDirection.DOWN
+        ),
+        SymbolQuote(
+            symbol = "NAS100",
+            description = "US Tech 100 Cash Index",
+            digits = 2,
+            bid = 29763.58,
+            ask = 29765.08,
+            low = 27395.47,
+            high = 29960.00,
+            changePoints = -1043,
+            changePercent = -0.35,
+            spread = 150,
+            time = "06:09:08",
             tickDirection = TickDirection.DOWN,
             bidDirection = TickDirection.DOWN,
             askDirection = TickDirection.DOWN
@@ -70,57 +183,25 @@ class TradingRepository(private val scope: CoroutineScope) {
             changePercent = 0.10,
             spread = 5,
             time = "06:09:06",
+            tickDirection = TickDirection.UP,
+            bidDirection = TickDirection.UP,
+            askDirection = TickDirection.UP
+        ),
+        SymbolQuote(
+            symbol = "EURUSD",
+            description = "Euro vs US Dollar",
+            digits = 5,
+            bid = 1.12198,
+            ask = 1.12200,
+            low = 1.12022,
+            high = 1.12267,
+            changePoints = -259,
+            changePercent = -0.23,
+            spread = 2,
+            time = "06:09:06",
             tickDirection = TickDirection.DOWN,
             bidDirection = TickDirection.DOWN,
-            askDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "USDCHF",
-            description = "US Dollar vs Swiss Franc",
-            digits = 5,
-            bid = 0.82374,
-            ask = 0.82377,
-            low = 0.82321,
-            high = 0.82522,
-            changePoints = -158,
-            changePercent = -0.19,
-            spread = 3,
-            time = "06:09:06",
-            tickDirection = TickDirection.UP,
-            bidDirection = TickDirection.UP,
-            askDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "USDJPY",
-            description = "US Dollar vs Japanese Yen",
-            digits = 3,
-            bid = 156.813,
-            ask = 156.813,
-            low = 156.652,
-            high = 157.220,
-            changePoints = -13,
-            changePercent = -0.01,
-            spread = 0,
-            time = "06:09:06",
-            tickDirection = TickDirection.UP,
-            bidDirection = TickDirection.UP,
             askDirection = TickDirection.DOWN
-        ),
-        SymbolQuote(
-            symbol = "USDCAD",
-            description = "US Dollar vs Canadian Dollar",
-            digits = 5,
-            bid = 1.40054,
-            ask = 1.40056,
-            low = 1.39987,
-            high = 1.40435,
-            changePoints = -41,
-            changePercent = -0.03,
-            spread = 2,
-            time = "06:09:10",
-            tickDirection = TickDirection.UP,
-            bidDirection = TickDirection.UP,
-            askDirection = TickDirection.UP
         ),
         SymbolQuote(
             symbol = "AUDUSD",
@@ -130,285 +211,13 @@ class TradingRepository(private val scope: CoroutineScope) {
             ask = 0.70309,
             low = 0.70188,
             high = 0.70398,
-            changePoints = -42,
-            changePercent = -0.06,
-            spread = 2,
-            time = "06:09:08",
-            tickDirection = TickDirection.DOWN,
-            bidDirection = TickDirection.DOWN,
-            askDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "NZDUSD",
-            description = "New Zealand Dollar vs US Dollar",
-            digits = 5,
-            bid = 0.57025,
-            ask = 0.57026,
-            low = 0.56953,
-            high = 0.57072,
-            changePoints = 35,
+            changePoints = 42,
             changePercent = 0.06,
-            spread = 1,
-            time = "06:09:06",
-            tickDirection = TickDirection.UP,
-            bidDirection = TickDirection.UP,
-            askDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "AUDNZD",
-            description = "Australian Dollar vs New Zealand Dollar",
-            digits = 5,
-            bid = 1.23286,
-            ask = 1.23297,
-            low = 1.23134,
-            high = 1.23442,
-            changePoints = -134,
-            changePercent = -0.11,
-            spread = 11,
-            time = "06:09:08",
-            tickDirection = TickDirection.DOWN,
-            bidDirection = TickDirection.DOWN,
-            askDirection = TickDirection.DOWN
-        ),
-        SymbolQuote(
-            symbol = "AUDCAD",
-            description = "Australian Dollar vs Canadian Dollar",
-            digits = 5,
-            bid = 0.98459,
-            ask = 0.98468,
-            low = 0.98359,
-            high = 0.98775,
-            changePoints = -87,
-            changePercent = -0.09,
-            spread = 9,
+            spread = 2,
             time = "06:09:08",
             tickDirection = TickDirection.UP,
             bidDirection = TickDirection.UP,
             askDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "XAUUSD",
-            description = "Gold Spot (1 Lot = 100 oz)",
-            digits = 2,
-            bid = 4001.44,
-            ask = 4001.59,
-            low = 3981.96,
-            high = 4017.86,
-            changePoints = 698,
-            changePercent = 0.42,
-            spread = 15,
-            time = "06:09:08",
-            tickDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "NDX100",
-            description = "US Tech 100 Cash Index",
-            digits = 2,
-            bid = 29763.58,
-            ask = 29765.08,
-            low = 27395.47,
-            high = 29960.00,
-            changePoints = 1043,
-            changePercent = 0.35,
-            spread = 150,
-            time = "06:09:08",
-            tickDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "BTCUSD",
-            description = "Bitcoin vs US Dollar",
-            digits = 2,
-            bid = 81850.00,
-            ask = 81853.50,
-            low = 79800.00,
-            high = 82900.00,
-            changePoints = 1450,
-            changePercent = 1.80,
-            spread = 350,
-            time = "06:09:08",
-            tickDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "AUDCHF",
-            description = "Australian Dollar vs Swiss Franc",
-            digits = 5,
-            bid = 0.58177,
-            ask = 0.58179,
-            low = 0.58126,
-            high = 0.58518,
-            changePoints = -299,
-            changePercent = -0.51,
-            spread = 2,
-            time = "06:09:08",
-            tickDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "AUDJPY",
-            description = "Australian Dollar vs Japanese Yen",
-            digits = 3,
-            bid = 110.427,
-            ask = 110.429,
-            low = 110.231,
-            high = 111.014,
-            changePoints = -401,
-            changePercent = -0.36,
-            spread = 2,
-            time = "06:09:08",
-            tickDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "CADCHF",
-            description = "Canadian Dollar vs Swiss Franc",
-            digits = 5,
-            bid = 0.58718,
-            ask = 0.58720,
-            low = 0.58552,
-            high = 0.58910,
-            changePoints = 32,
-            changePercent = 0.05,
-            spread = 2,
-            time = "06:09:08",
-            tickDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "CADJPY",
-            description = "Canadian Dollar vs Japanese Yen",
-            digits = 3,
-            bid = 111.455,
-            ask = 111.457,
-            low = 111.052,
-            high = 111.909,
-            changePoints = 235,
-            changePercent = 0.21,
-            spread = 2,
-            time = "06:09:08",
-            tickDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "CHFJPY",
-            description = "Swiss Franc vs Japanese Yen",
-            digits = 3,
-            bid = 189.810,
-            ask = 189.814,
-            low = 189.365,
-            high = 190.103,
-            changePoints = 314,
-            changePercent = 0.17,
-            spread = 4,
-            time = "06:09:08",
-            tickDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "EURAUD",
-            description = "Euro vs Australian Dollar",
-            digits = 5,
-            bid = 1.62109,
-            ask = 1.62112,
-            low = 1.61100,
-            high = 1.62340,
-            changePoints = 957,
-            changePercent = 0.59,
-            spread = 3,
-            time = "06:09:08",
-            tickDirection = TickDirection.DOWN
-        ),
-        SymbolQuote(
-            symbol = "GBXUSD",
-            description = "Great Britain Pence vs US Dollar",
-            digits = 5,
-            bid = 0.01330,
-            ask = 0.01340,
-            low = 0.01330,
-            high = 0.01330,
-            changePoints = 0,
-            changePercent = 0.00,
-            spread = 10,
-            time = "10:05:02",
-            tickDirection = TickDirection.NEUTRAL
-        ),
-        SymbolQuote(
-            symbol = "USDCLP",
-            description = "US Dollar vs Chilean Peso",
-            digits = 2,
-            bid = 992.85,
-            ask = 993.91,
-            low = 986.85,
-            high = 993.78,
-            changePoints = 755,
-            changePercent = 0.77,
-            spread = 106,
-            time = "19:09:59",
-            tickDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "USDCOP",
-            description = "US Dollar vs Colombian Peso",
-            digits = 2,
-            bid = 3153.63,
-            ask = 3170.54,
-            low = 3140.22,
-            high = 3199.54,
-            changePoints = -3871,
-            changePercent = -1.21,
-            spread = 1691,
-            time = "20:49:37",
-            tickDirection = TickDirection.DOWN
-        ),
-        SymbolQuote(
-            symbol = "USDIDR",
-            description = "US Dollar vs Indonesian Rupiah",
-            digits = 1,
-            bid = 18114.2,
-            ask = 18124.8,
-            low = 18077.7,
-            high = 18142.5,
-            changePoints = 17,
-            changePercent = 0.01,
-            spread = 106,
-            time = "22:59:50",
-            tickDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "USDKRW",
-            description = "US Dollar vs South Korean Won",
-            digits = 2,
-            bid = 1323.29,
-            ask = 1323.80,
-            low = 1319.91,
-            high = 1325.60,
-            changePoints = -169,
-            changePercent = -0.13,
-            spread = 51,
-            time = "22:59:55",
-            tickDirection = TickDirection.DOWN
-        ),
-        SymbolQuote(
-            symbol = "USDTHB",
-            description = "US Dollar vs Thai Baht",
-            digits = 5,
-            bid = 33.73700,
-            ask = 33.82300,
-            low = 33.67200,
-            high = 33.77800,
-            changePoints = 4600,
-            changePercent = 0.14,
-            spread = 8600,
-            time = "23:59:59",
-            tickDirection = TickDirection.UP
-        ),
-        SymbolQuote(
-            symbol = "USDTWD",
-            description = "US Dollar vs Taiwan Dollar",
-            digits = 3,
-            bid = 32.589,
-            ask = 32.608,
-            low = 32.564,
-            high = 32.621,
-            changePoints = -25,
-            changePercent = -0.08,
-            spread = 19,
-            time = "21:59:54",
-            tickDirection = TickDirection.DOWN
         )
     )
 
@@ -437,7 +246,7 @@ class TradingRepository(private val scope: CoroutineScope) {
     private val initialHistory = listOf(
         HistoryTrade(
             id = 9001L,
-            symbol = "NDX100",
+            symbol = "NAS100",
             isBuy = false,
             lots = 0.01,
             openPrice = 27548.11,
@@ -454,7 +263,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         ),
         HistoryTrade(
             id = 9002L,
-            symbol = "NDX100",
+            symbol = "NAS100",
             isBuy = false,
             lots = 0.01,
             openPrice = 27493.22,
@@ -471,7 +280,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         ),
         HistoryTrade(
             id = 9003L,
-            symbol = "NDX100",
+            symbol = "NAS100",
             isBuy = true,
             lots = 0.01,
             openPrice = 27729.94,
@@ -488,7 +297,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         ),
         HistoryTrade(
             id = 9004L,
-            symbol = "NDX100",
+            symbol = "NAS100",
             isBuy = true,
             lots = 0.01,
             openPrice = 28105.58,
@@ -505,14 +314,14 @@ class TradingRepository(private val scope: CoroutineScope) {
         ),
         HistoryTrade(
             id = 9005L,
-            symbol = "NDX100",
+            symbol = "NAS100",
             isBuy = true,
             lots = 0.01,
             openPrice = 29884.47,
             closePrice = 29881.87,
             profit = -0.52,
             openTime = "2026.08.05 17:12:03",
-            closeTime = "2026.08.05 17:15:14",
+            closeTime = "2026.08.05 17:15:29",
             commission = 0.00,
             swap = 0.00,
             sl = 29881.87,
@@ -522,7 +331,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         ),
         HistoryTrade(
             id = 9006L,
-            symbol = "NDX100",
+            symbol = "NAS100",
             isBuy = true,
             lots = 0.01,
             openPrice = 29617.99,
@@ -539,7 +348,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         ),
         HistoryTrade(
             id = 9007L,
-            symbol = "NDX100",
+            symbol = "NAS100",
             isBuy = true,
             lots = 0.01,
             openPrice = 29821.56,
@@ -918,7 +727,8 @@ class TradingRepository(private val scope: CoroutineScope) {
      * and synchronized with trades).
      */
     fun getRecentSymbolM1Candles(symbol: String, limit: Int = 30): List<Candle> {
-        val cleanSym = symbol.trim().uppercase(Locale.US).ifBlank { "NDX100" }
+        val rawSym = symbol.trim().uppercase(Locale.US).ifBlank { "NAS100" }
+        val cleanSym = if (rawSym == "NDX100") "NAS100" else rawSym
         val m1Key = cacheKey(cleanSym, Timeframe.M1)
         if (cleanSym == currentActiveSymbol && currentActiveTimeframe == Timeframe.M1) {
             val liveCandles = candleAggregator.getCandles()
@@ -950,11 +760,12 @@ class TradingRepository(private val scope: CoroutineScope) {
         val rawMs = SriLankaMarketHours.parseMt5DateTimeMillis(dateTimeStr)
         if (rawMs <= 0L) return null
 
-        val cleanSym = symbol.trim().uppercase(Locale.US).ifBlank { "NDX100" }
+        val rawSym = symbol.trim().uppercase(Locale.US).ifBlank { "NAS100" }
+        val cleanSym = if (rawSym == "NDX100") "NAS100" else rawSym
         val quote = _quotes.value.find { it.symbol.equals(cleanSym, ignoreCase = true) }
         val digits = quote?.digits ?: when {
             cleanSym.contains("JPY") -> 3
-            cleanSym.contains("XAU") || cleanSym.contains("NDX") || cleanSym.contains("BTC") -> 2
+            cleanSym.contains("XAU") || cleanSym.contains("NAS") || cleanSym.contains("NDX") || cleanSym.contains("BTC") -> 2
             else -> 5
         }
 
@@ -1002,11 +813,25 @@ class TradingRepository(private val scope: CoroutineScope) {
 
         val hasExplicitSeconds = dateTimeStr.trim().count { it == ':' } >= 2
         val typedSec = ((validMs - minuteBucketMs) / 1000L).toInt().coerceIn(0, 59)
+        val usedCloseSecs = buildSet {
+            _history.value.forEach { h ->
+                if (!h.isWithdrawal) {
+                    val hCloseMs = SriLankaMarketHours.parseMt5DateTimeMillis(h.closeTime)
+                    if (hCloseMs > 0L) {
+                        add(((hCloseMs % 60_000L) / 1000L).toInt())
+                    }
+                }
+            }
+            add(openSec)
+        }
+        val randomCloseSec = (1..58).filter { it !in usedCloseSecs }.randomOrNull()
+            ?: (1..58).filter { it != openSec }.random()
         val effectiveSec = if (hasExplicitSeconds) {
             typedSec
         } else {
-            if (isOpen) firstPeakSec else secondPeakSec
+            if (isOpen) firstPeakSec else randomCloseSec
         }
+        val chipCloseSec = if (isOpen) closeSec else randomCloseSec
 
         val rawPriceAtSec = when {
             effectiveSec <= openSec -> candle.open
@@ -1047,7 +872,7 @@ class TradingRepository(private val scope: CoroutineScope) {
             openSecondTimestamp = String.format(Locale.US, "%s:%02d", minuteLabel, openSec),
             highSecondTimestamp = String.format(Locale.US, "%s:%02d", minuteLabel, highSec),
             lowSecondTimestamp = String.format(Locale.US, "%s:%02d", minuteLabel, lowSec),
-            closeSecondTimestamp = String.format(Locale.US, "%s:%02d", minuteLabel, closeSec)
+            closeSecondTimestamp = String.format(Locale.US, "%s:%02d", minuteLabel, chipCloseSec)
         )
     }
 
@@ -1121,7 +946,8 @@ class TradingRepository(private val scope: CoroutineScope) {
         tp: Double?,
         strictWithinTradeWindow: Boolean = false
     ): TpSlChartCheckResult {
-        val cleanSym = symbol.trim().uppercase(Locale.US).ifBlank { "NDX100" }
+        val rawSym = symbol.trim().uppercase(Locale.US).ifBlank { "NAS100" }
+        val cleanSym = if (rawSym == "NDX100") "NAS100" else rawSym
         val validSl = sl?.takeIf { it > 0.0 }
         val validTp = tp?.takeIf { it > 0.0 }
 
@@ -1135,7 +961,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val quote = _quotes.value.find { it.symbol.equals(cleanSym, ignoreCase = true) }
         val digits = quote?.digits ?: when {
             cleanSym.contains("JPY") -> 3
-            cleanSym.contains("XAU") || cleanSym.contains("NDX") || cleanSym.contains("BTC") -> 2
+            cleanSym.contains("XAU") || cleanSym.contains("NAS") || cleanSym.contains("NDX") || cleanSym.contains("BTC") -> 2
             else -> 5
         }
         val minPoint = fastForexService.getMinPoint(cleanSym)
@@ -1224,7 +1050,23 @@ class TradingRepository(private val scope: CoroutineScope) {
             } else {
                 0.5
             }
-            val hitSec = (t0 + ((t1 - t0) * frac).toInt()).coerceIn(0, 59)
+            val baseHitSec = (t0 + ((t1 - t0) * frac).toInt()).coerceIn(1, 58)
+            val minAllowedSec = if (bucketMs == openBucket) (openSec + 2).coerceAtMost(58) else 1
+            val usedCloseSecs = buildSet {
+                _history.value.forEach { h ->
+                    if (!h.isWithdrawal) {
+                        val hCloseMs = SriLankaMarketHours.parseMt5DateTimeMillis(h.closeTime)
+                        if (hCloseMs > 0L) add(((hCloseMs % 60_000L) / 1000L).toInt())
+                    }
+                }
+                add(openSec)
+            }
+            val hitSec = if (baseHitSec >= minAllowedSec && baseHitSec !in usedCloseSecs) {
+                baseHitSec
+            } else {
+                (minAllowedSec..58).filter { it !in usedCloseSecs }.randomOrNull()
+                    ?: (minAllowedSec..58).random()
+            }
             val minLabel = minuteFmt.format(Date(bucketMs))
             val hitTs = String.format(Locale.US, "%s:%02d", minLabel, hitSec)
             return Triple(chosenOutcome, chosenPrice, hitTs)
@@ -1530,13 +1372,15 @@ class TradingRepository(private val scope: CoroutineScope) {
     private fun currencyToUsdRate(currency: String, quoteMap: Map<String, SymbolQuote>): Double {
         return when (currency) {
             "USD" -> 1.0
-            "EUR" -> quoteMap["EURUSD"]?.bid ?: 1.12400
-            "GBP" -> quoteMap["GBPUSD"]?.bid ?: 1.33300
-            "AUD" -> quoteMap["AUDUSD"]?.bid ?: 0.71713
-            "NZD" -> (quoteMap["AUDUSD"]?.bid ?: 0.71713) / (quoteMap["AUDNZD"]?.bid ?: 1.23458)
-            "CAD" -> (quoteMap["AUDUSD"]?.bid ?: 0.71713) / (quoteMap["AUDCAD"]?.bid ?: 0.99077)
-            "CHF" -> (quoteMap["AUDUSD"]?.bid ?: 0.71713) / (quoteMap["AUDCHF"]?.bid ?: 0.58177)
-            "JPY" -> (quoteMap["AUDUSD"]?.bid ?: 0.71713) / (quoteMap["AUDJPY"]?.bid ?: 110.427)
+            "EUR" -> quoteMap["EURUSD"]?.bid ?: 1.12198
+            "GBP" -> quoteMap["GBPUSD"]?.bid ?: 1.33804
+            "AUD" -> quoteMap["AUDUSD"]?.bid ?: 0.70307
+            "NZD" -> quoteMap["NZDUSD"]?.bid ?: 0.57025
+            "CAD" -> 1.0 / (quoteMap["USDCAD"]?.bid ?: 1.40054)
+            "CHF" -> 1.0 / (quoteMap["USDCHF"]?.bid ?: 0.82374)
+            "JPY" -> 1.0 / (quoteMap["USDJPY"]?.bid ?: 156.813)
+            "SEK" -> 1.0 / (quoteMap["USDSEK"]?.bid ?: 10.68450)
+            "CNH" -> 1.0 / (quoteMap["USDCNH"]?.bid ?: 7.24680)
             "CLP" -> 1.0 / (quoteMap["USDCLP"]?.bid ?: 992.85)
             "COP" -> 1.0 / (quoteMap["USDCOP"]?.bid ?: 3153.63)
             "IDR" -> 1.0 / (quoteMap["USDIDR"]?.bid ?: 18114.2)
@@ -1555,7 +1399,7 @@ class TradingRepository(private val scope: CoroutineScope) {
     private fun calculatePositionMarginUsd(pos: TradePosition, quoteMap: Map<String, SymbolQuote>): Double {
         val sym = pos.symbol.uppercase(Locale.US)
         val rawMargin = when {
-            sym.contains("NDX") || sym.contains("US30") -> {
+            sym.contains("NAS") || sym.contains("NDX") || sym.contains("US30") -> {
                 // Index CFD: contract size 20 per 1.00 lot with 1:20 index margin (28910.88 * 0.01 = 289.11)
                 pos.openPrice * pos.lots
             }
@@ -1601,7 +1445,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val sym = pos.symbol.uppercase(Locale.US)
         val priceDiff = if (pos.isBuy) (currentPrice - pos.openPrice) else (pos.openPrice - currentPrice)
         val rawProfit = when {
-            sym.contains("NDX") || sym.contains("US30") -> {
+            sym.contains("NAS") || sym.contains("NDX") || sym.contains("US30") -> {
                 priceDiff * pos.lots * 20.0
             }
             sym.contains("XAU") -> {
@@ -1631,13 +1475,280 @@ class TradingRepository(private val scope: CoroutineScope) {
         return roundTo2(rawProfit)
     }
 
+    /**
+     * Returns true if the active or specified account belongs to Fusion Markets (Zero Account),
+     * or false for Moneta Markets (Prime ECN / default).
+     */
+    fun isFusionBroker(account: AccountInfo = _account.value): Boolean {
+        return account.logoType.equals("FUSION", ignoreCase = true) ||
+            account.brokerName.contains("Fusion", ignoreCase = true) ||
+            account.accountId.contains("Fusion", ignoreCase = true)
+    }
+
+    /**
+     * Returns true for index CFD instruments (NAS100, NDX100, US30, SPX500, GER40, UK100),
+     * which have $0.00 extra commission on both Fusion Markets and Moneta Markets.
+     */
+    fun isIndexInstrument(symbol: String): Boolean {
+        val sym = symbol.trim().uppercase(Locale.US)
+        return sym.contains("NAS") ||
+            sym.contains("NDX") ||
+            sym.contains("US30") ||
+            sym.contains("SPX") ||
+            sym.contains("GER") ||
+            sym.contains("UK100") ||
+            sym.contains("US500")
+    }
+
+    /**
+     * Returns the round-turn commission rate in USD per 1.00 Standard Lot:
+     * - Indices (NAS100 / NDX100 / US30): $0.00
+     * - Fusion Markets (Zero Account): $4.50 / Standard Lot ($2.25 open + $2.25 close)
+     * - Moneta Markets (Prime ECN): $6.00 / Standard Lot ($3.00 open + $3.00 close)
+     */
+    fun getBrokerRoundTurnCommissionRate(
+        symbol: String,
+        account: AccountInfo = _account.value
+    ): Double {
+        if (isIndexInstrument(symbol)) return 0.00
+        return if (isFusionBroker(account)) 4.50 else 6.00
+    }
+
+    /**
+     * Calculates MT5 Commission in USD (negative deduction):
+     * Commission (USD) = -(Lot Size * Round Turn Rate)
+     * If [isOpenOnly] is true (for a newly opened running position), deducts half of the round-turn commission
+     * at entry, and the remaining half upon close.
+     */
+    fun calculateCommissionUsd(
+        symbol: String,
+        lots: Double,
+        isOpenOnly: Boolean = false,
+        account: AccountInfo = _account.value
+    ): Double {
+        val safeLots = lots.coerceAtLeast(0.0)
+        val roundTurnRate = getBrokerRoundTurnCommissionRate(symbol, account)
+        if (roundTurnRate <= 0.0 || safeLots <= 0.0) return 0.00
+        val factor = if (isOpenOnly) 0.5 else 1.0
+        return roundTo2(-(safeLots * roundTurnRate * factor))
+    }
+
+    /**
+     * Returns the broker's indicative Daily Swap Rate in USD per 1.00 Standard Lot:
+     * - EURUSD:
+     *     Long (Buy):  Fusion -$6.50 | Moneta -$7.20
+     *     Short (Sell): Fusion +$1.80 | Moneta +$1.50
+     * - XAUUSD (Gold):
+     *     Long (Buy):  Fusion -$24.50 | Moneta -$27.00
+     *     Short (Sell): Fusion +$9.80  | Moneta +$8.50
+     * - NAS100 / NDX100:
+     *     Long (Buy):  Fusion -$3.20 | Moneta -$3.50
+     *     Short (Sell): Fusion -$1.90 | Moneta -$2.10
+     */
+    fun getDailySwapRatePerLot(
+        symbol: String,
+        isBuy: Boolean,
+        account: AccountInfo = _account.value
+    ): Double {
+        val sym = symbol.trim().uppercase(Locale.US)
+        val fusion = isFusionBroker(account)
+        return when {
+            sym.contains("XAU") -> {
+                if (isBuy) {
+                    if (fusion) -24.50 else -27.00
+                } else {
+                    if (fusion) 9.80 else 8.50
+                }
+            }
+            sym.contains("EURUSD") -> {
+                if (isBuy) {
+                    if (fusion) -6.50 else -7.20
+                } else {
+                    if (fusion) 1.80 else 1.50
+                }
+            }
+            sym.contains("NAS") || sym.contains("NDX") || isIndexInstrument(sym) -> {
+                if (isBuy) {
+                    if (fusion) -3.20 else -3.50
+                } else {
+                    if (fusion) -1.90 else -2.10
+                }
+            }
+            sym.contains("XAG") -> {
+                if (isBuy) {
+                    if (fusion) -8.50 else -9.50
+                } else {
+                    if (fusion) 2.40 else 2.10
+                }
+            }
+            sym.contains("BTC") || sym.contains("ETH") -> {
+                if (fusion) -14.00 else -16.00
+            }
+            else -> {
+                if (isBuy) {
+                    if (fusion) -6.50 else -7.20
+                } else {
+                    if (fusion) 1.80 else 1.50
+                }
+            }
+        }
+    }
+
+    /**
+     * Counts the number of daily server rollovers (00:00 Server Time) crossed between [openTimeStr]
+     * and [closeTimeStr], applying the 3x Triple Swap Rule on Wednesday night rollover to cover weekend holding.
+     */
+    fun calculateRolloverSwapDays(openTimeStr: String, closeTimeStr: String): Int {
+        val openMs = SriLankaMarketHours.parseMt5DateTimeMillis(openTimeStr)
+        val closeMs = SriLankaMarketHours.parseMt5DateTimeMillis(closeTimeStr)
+        if (openMs <= 0L || closeMs <= 0L || closeMs <= openMs) return 0
+
+        val openCal = Calendar.getInstance(SriLankaMarketHours.SRI_LANKA_TIME_ZONE, Locale.US).apply {
+            timeInMillis = openMs
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val closeCal = Calendar.getInstance(SriLankaMarketHours.SRI_LANKA_TIME_ZONE, Locale.US).apply {
+            timeInMillis = closeMs
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+
+        if (closeCal.timeInMillis <= openCal.timeInMillis) return 0
+
+        var rolloverDays = 0
+        var rawNightsCrossed = 0
+        val cursor = openCal.clone() as Calendar
+        while (cursor.timeInMillis < closeCal.timeInMillis && rawNightsCrossed < 3650) {
+            rawNightsCrossed++
+            when (cursor.get(Calendar.DAY_OF_WEEK)) {
+                Calendar.WEDNESDAY -> rolloverDays += 3 // Triple Swap Rule on Wednesday night
+                Calendar.MONDAY,
+                Calendar.TUESDAY,
+                Calendar.THURSDAY,
+                Calendar.FRIDAY -> rolloverDays += 1
+                else -> {
+                    // Weekend nights (Sat/Sun) are covered by Wednesday's 3x Triple Swap
+                }
+            }
+            cursor.add(Calendar.DAY_OF_YEAR, 1)
+        }
+        if (rawNightsCrossed > 0 && rolloverDays == 0) {
+            rolloverDays = rawNightsCrossed
+        }
+        return rolloverDays
+    }
+
+    /**
+     * Calculates MT5 Swap in USD:
+     * Swap (USD) = Lots * Daily Swap Rate * Rollover Days (with 3x Wednesday Triple Swap)
+     */
+    fun calculateSwapUsd(
+        symbol: String,
+        isBuy: Boolean,
+        lots: Double,
+        openTimeStr: String,
+        closeTimeStr: String,
+        account: AccountInfo = _account.value
+    ): Double {
+        val safeLots = lots.coerceAtLeast(0.0)
+        if (safeLots <= 0.0) return 0.00
+        val rolloverDays = calculateRolloverSwapDays(openTimeStr, closeTimeStr)
+        if (rolloverDays <= 0) return 0.00
+        val dailyRate = getDailySwapRatePerLot(symbol, isBuy, account)
+        return roundTo2(safeLots * dailyRate * rolloverDays)
+    }
+
+    /**
+     * Ensures a trade's closeTime has a realistic random second (:01 .. :58) that:
+     * 1. Never repeats the same second (:ss) as other trades in History or its own openTime,
+     * 2. Is strictly after openTime when open and close are within the same minute,
+     * 3. Generates a fresh random second when [forceNewRandomSecond] is true or when the input
+     *    has no explicit seconds / has :00 / collides with an existing trade's close second.
+     */
+    fun randomizeCloseTimeSecond(
+        openTimeStr: String,
+        closeTimeStr: String,
+        excludeTradeId: Long? = null,
+        forceNewRandomSecond: Boolean = false
+    ): String {
+        val rawCloseMs = SriLankaMarketHours.parseMt5DateTimeMillis(closeTimeStr)
+        if (rawCloseMs <= 0L) return closeTimeStr
+        val rawOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(openTimeStr)
+
+        val closeBucketMs = (rawCloseMs / 60_000L) * 60_000L
+        val openBucketMs = if (rawOpenMs > 0L) (rawOpenMs / 60_000L) * 60_000L else 0L
+        val openSec = if (rawOpenMs > 0L) ((rawOpenMs - openBucketMs) / 1000L).toInt().coerceIn(0, 59) else -1
+        val currentCloseSec = ((rawCloseMs - closeBucketMs) / 1000L).toInt().coerceIn(0, 59)
+
+        val usedCloseSecs = buildSet {
+            _history.value.forEach { h ->
+                if (!h.isWithdrawal && h.id != excludeTradeId) {
+                    val hCloseMs = SriLankaMarketHours.parseMt5DateTimeMillis(h.closeTime)
+                    if (hCloseMs > 0L) {
+                        add(((hCloseMs % 60_000L) / 1000L).toInt())
+                    }
+                }
+            }
+            if (openSec in 0..59) add(openSec)
+        }
+
+        val hasExplicitSeconds = closeTimeStr.trim().count { it == ':' } >= 2
+        val sameMinuteInvalid = openBucketMs == closeBucketMs && openSec >= 0 && currentCloseSec <= openSec
+        val needsRandom = forceNewRandomSecond ||
+            !hasExplicitSeconds ||
+            currentCloseSec == 0 ||
+            currentCloseSec in usedCloseSecs ||
+            sameMinuteInvalid
+
+        val finalSec = if (!needsRandom) {
+            currentCloseSec
+        } else {
+            val minSec = if (openBucketMs == closeBucketMs && openSec >= 0) {
+                (openSec + 2).coerceAtMost(58)
+            } else {
+                1
+            }
+            val maxSec = if (minSec >= 58) 59 else 58
+            val primaryPool = (minSec..maxSec).filter { it !in usedCloseSecs && it != currentCloseSec }
+            val fallbackPool = (minSec..maxSec).filter { it != currentCloseSec && it != openSec }
+            when {
+                primaryPool.isNotEmpty() -> primaryPool.random()
+                fallbackPool.isNotEmpty() -> fallbackPool.random()
+                else -> (minSec..maxSec).random()
+            }
+        }
+
+        val minuteFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.US).apply {
+            timeZone = SriLankaMarketHours.SRI_LANKA_TIME_ZONE
+        }
+        val minuteLabel = minuteFmt.format(Date(closeBucketMs))
+        return String.format(Locale.US, "%s:%02d", minuteLabel, finalSec)
+    }
+
     private fun recalculatePositionsAndAccount(currentQuotes: List<SymbolQuote>) {
         val quoteMap = currentQuotes.associateBy { it.symbol }
+        val currentAccount = _account.value
+        val nowTimeStr = synchronized(dateTimeFormat) {
+            dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis()))
+        }
+
         var totalFloatingPnL = 0.0
+        var totalOpenSwap = 0.0
+        var totalOpenCommission = 0.0
         var totalMargin = 0.0
 
         val updatedPositions = _positions.value.map { pos ->
             val quote = quoteMap[pos.symbol]
+            val openComm = calculateCommissionUsd(pos.symbol, pos.lots, isOpenOnly = true, account = currentAccount)
+            val openSwap = calculateSwapUsd(pos.symbol, pos.isBuy, pos.lots, pos.openTime, nowTimeStr, account = currentAccount)
+            totalOpenSwap += openSwap
+            totalOpenCommission += openComm
+
             if (quote != null) {
                 val currentPrice = if (pos.isBuy) quote.bid else quote.ask
                 val profit = calculatePositionProfitUsd(pos, currentPrice, quoteMap)
@@ -1645,30 +1756,96 @@ class TradingRepository(private val scope: CoroutineScope) {
                 totalMargin += positionMargin
                 totalFloatingPnL += profit
 
-                pos.copy(currentPrice = currentPrice, profit = profit)
+                pos.copy(
+                    currentPrice = currentPrice,
+                    profit = profit,
+                    commission = openComm,
+                    swap = openSwap
+                )
             } else {
                 val positionMargin = calculatePositionMarginUsd(pos, quoteMap)
                 totalMargin += positionMargin
                 totalFloatingPnL += pos.profit
-                pos
+                pos.copy(
+                    commission = openComm,
+                    swap = openSwap
+                )
             }
         }
 
         _positions.value = updatedPositions
 
-        val currentAccount = _account.value
+        // Ensure closed history trades have unique random close seconds (:01..:58) and accurate broker commission & swap
+        val seenCloseSeconds = mutableSetOf<Int>()
+        val minuteFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.US).apply {
+            timeZone = SriLankaMarketHours.SRI_LANKA_TIME_ZONE
+        }
+        val enrichedHistory = _history.value.map { item ->
+            if (item.isWithdrawal) {
+                item
+            } else {
+                val rawCloseMs = SriLankaMarketHours.parseMt5DateTimeMillis(item.closeTime)
+                val rawOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(item.openTime)
+                val fixedCloseTime = if (rawCloseMs > 0L) {
+                    val closeBucketMs = (rawCloseMs / 60_000L) * 60_000L
+                    val openBucketMs = if (rawOpenMs > 0L) (rawOpenMs / 60_000L) * 60_000L else 0L
+                    val openSec = if (rawOpenMs > 0L) ((rawOpenMs - openBucketMs) / 1000L).toInt().coerceIn(0, 59) else -1
+                    val closeSec = ((rawCloseMs - closeBucketMs) / 1000L).toInt().coerceIn(0, 59)
+                    val hasExplicitSec = item.closeTime.trim().count { it == ':' } >= 2
+                    val sameMinInvalid = openBucketMs == closeBucketMs && openSec >= 0 && closeSec <= openSec
+
+                    if (!hasExplicitSec || closeSec == 0 || closeSec == openSec || closeSec in seenCloseSeconds || sameMinInvalid) {
+                        val minSec = if (openBucketMs == closeBucketMs && openSec >= 0) (openSec + 2).coerceAtMost(58) else 1
+                        val maxSec = if (minSec >= 58) 59 else 58
+                        val chosenSec = (minSec..maxSec).filter { it !in seenCloseSeconds && it != openSec }.randomOrNull()
+                            ?: (minSec..maxSec).filter { it != openSec }.randomOrNull()
+                            ?: (minSec..maxSec).random()
+                        seenCloseSeconds.add(chosenSec)
+                        val minLabel = minuteFmt.format(Date(closeBucketMs))
+                        String.format(Locale.US, "%s:%02d", minLabel, chosenSec)
+                    } else {
+                        seenCloseSeconds.add(closeSec)
+                        item.closeTime
+                    }
+                } else {
+                    item.closeTime
+                }
+
+                val normalizedSym = if (item.symbol.equals("NDX100", ignoreCase = true)) "NAS100" else item.symbol
+                val expectedComm = if (item.commission != 0.0) {
+                    item.commission
+                } else {
+                    calculateCommissionUsd(normalizedSym, item.lots, isOpenOnly = false, account = currentAccount)
+                }
+                val expectedSwap = if (item.swap != 0.0) {
+                    item.swap
+                } else {
+                    calculateSwapUsd(normalizedSym, item.isBuy, item.lots, item.openTime, fixedCloseTime, account = currentAccount)
+                }
+                if (expectedComm != item.commission || expectedSwap != item.swap || fixedCloseTime != item.closeTime || normalizedSym != item.symbol) {
+                    item.copy(symbol = normalizedSym, closeTime = fixedCloseTime, commission = expectedComm, swap = expectedSwap)
+                } else {
+                    item
+                }
+            }
+        }
+        if (enrichedHistory != _history.value) {
+            _history.value = enrichedHistory
+        }
+
         val deposit = currentAccount.deposit.coerceAtLeast(0.0)
         val currentHistory = _history.value
-        val totalRealizedProfit = roundTo2(
-            currentHistory.filter { !it.isWithdrawal }.sumOf { it.profit }
-        )
+        val closedTrades = currentHistory.filter { !it.isWithdrawal }
+        val totalRealizedProfit = roundTo2(closedTrades.sumOf { it.profit })
+        val totalSwap = roundTo2(closedTrades.sumOf { it.swap })
+        val totalCommission = roundTo2(closedTrades.sumOf { it.commission })
         val totalWithdrawals = roundTo2(
             currentHistory.filter { it.isWithdrawal }.sumOf { abs(it.profit) }
         )
-        val balance = roundTo2(deposit + totalRealizedProfit - totalWithdrawals)
+        val balance = roundTo2(deposit + totalRealizedProfit + totalSwap + totalCommission - totalWithdrawals)
         val roundedFloating = roundTo2(totalFloatingPnL)
         val roundedMargin = roundTo2(totalMargin)
-        val equity = roundTo2(balance + roundedFloating)
+        val equity = roundTo2(balance + roundedFloating + totalOpenSwap + totalOpenCommission)
         val freeMargin = roundTo2(equity - roundedMargin)
         val marginLevel = if (roundedMargin > 0.0) roundTo2((equity / roundedMargin) * 100.0) else 0.0
 
@@ -1683,8 +1860,8 @@ class TradingRepository(private val scope: CoroutineScope) {
             freeMargin = freeMargin,
             marginLevel = marginLevel,
             floatingPnL = roundedFloating,
-            totalSwap = 0.00,
-            totalCommission = 0.00
+            totalSwap = totalSwap,
+            totalCommission = totalCommission
         )
         _account.value = updatedActiveAccount
         positionsByAccount[activeAccountKey] = updatedPositions
@@ -1769,18 +1946,27 @@ class TradingRepository(private val scope: CoroutineScope) {
             } else {
                 sortHistoryChronologically(local.loadHistoryForAccount(accKey)).also { historyByAccount[accKey] = it }
             }
-            val realized = roundTo2(accHist.filter { !it.isWithdrawal }.sumOf { it.profit })
+            val closedList = accHist.filter { !it.isWithdrawal }
+            val realized = roundTo2(closedList.sumOf { it.profit })
+            val totSwap = roundTo2(closedList.sumOf {
+                if (it.swap != 0.0) it.swap else calculateSwapUsd(it.symbol, it.isBuy, it.lots, it.openTime, it.closeTime, acc)
+            })
+            val totComm = roundTo2(closedList.sumOf {
+                if (it.commission != 0.0) it.commission else calculateCommissionUsd(it.symbol, it.lots, isOpenOnly = false, account = acc)
+            })
             val withdrawals = roundTo2(accHist.filter { it.isWithdrawal }.sumOf { abs(it.profit) })
             val dep = acc.deposit.coerceAtLeast(0.0)
-            val bal = roundTo2(dep + realized - withdrawals)
+            val bal = roundTo2(dep + realized + totSwap + totComm - withdrawals)
             acc.copy(
                 key = accKey,
                 deposit = dep,
                 realizedProfit = realized,
                 totalWithdrawal = withdrawals,
+                totalSwap = totSwap,
+                totalCommission = totComm,
                 balance = bal,
-                equity = bal + accPos.sumOf { it.profit },
-                freeMargin = bal + accPos.sumOf { it.profit }
+                equity = bal + accPos.sumOf { it.profit + it.swap + it.commission },
+                freeMargin = bal + accPos.sumOf { it.profit + it.swap + it.commission }
             )
         }
 
@@ -1940,7 +2126,8 @@ class TradingRepository(private val scope: CoroutineScope) {
                             floatingPnL = current.floatingPnL
                         ).copy(
                             key = targetAccKey,
-                            logoType = current.logoType
+                            logoType = current.logoType,
+                            depositDate = current.depositDate
                         )
                         _account.value = merged.copy(deposit = merged.deposit.coerceAtLeast(0.0))
                         recalculatePositionsAndAccount(_quotes.value)
@@ -2023,6 +2210,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val newId = generateUniqueTicketNumber()
 
         val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
+        val openComm = calculateCommissionUsd(symbol, lots, isOpenOnly = true)
         val newPos = TradePosition(
             id = newId,
             symbol = symbol,
@@ -2033,7 +2221,9 @@ class TradingRepository(private val scope: CoroutineScope) {
             sl = sl,
             tp = tp,
             profit = 0.0,
-            openTime = nowFormatted
+            openTime = nowFormatted,
+            commission = openComm,
+            swap = 0.0
         )
 
         _positions.update { listOf(newPos) + it }
@@ -2061,8 +2251,16 @@ class TradingRepository(private val scope: CoroutineScope) {
         val quote = quoteMap[pos.symbol]
         val closePrice = if (quote != null) (if (pos.isBuy) quote.bid else quote.ask) else pos.currentPrice
         val exactProfit = calculatePositionProfitUsd(pos, closePrice, quoteMap)
-        val closeTimeFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
+        val rawCloseTime = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
+        val closeTimeFormatted = randomizeCloseTimeSecond(
+            openTimeStr = pos.openTime,
+            closeTimeStr = rawCloseTime,
+            excludeTradeId = pos.id,
+            forceNewRandomSecond = true
+        )
         val formattedTicket = "#${if (pos.id >= 100000000L) pos.id else 385000000L + pos.id}"
+        val roundTurnCommission = calculateCommissionUsd(pos.symbol, pos.lots, isOpenOnly = false)
+        val rolloverSwap = calculateSwapUsd(pos.symbol, pos.isBuy, pos.lots, pos.openTime, closeTimeFormatted)
 
         val closedTrade = HistoryTrade(
             id = pos.id,
@@ -2074,8 +2272,8 @@ class TradingRepository(private val scope: CoroutineScope) {
             profit = exactProfit,
             openTime = pos.openTime,
             closeTime = closeTimeFormatted,
-            commission = 0.00,
-            swap = 0.00,
+            commission = roundTurnCommission,
+            swap = rolloverSwap,
             sl = pos.sl,
             tp = pos.tp,
             ticketId = formattedTicket
@@ -2112,8 +2310,16 @@ class TradingRepository(private val scope: CoroutineScope) {
         val remainingLots = roundTo2(pos.lots - closeLots)
         val closedPartPos = pos.copy(lots = closeLots)
         val proportionalProfit = calculatePositionProfitUsd(closedPartPos, closePrice, quoteMap)
-        val closeTimeFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
+        val rawCloseTime = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
+        val closeTimeFormatted = randomizeCloseTimeSecond(
+            openTimeStr = pos.openTime,
+            closeTimeStr = rawCloseTime,
+            excludeTradeId = pos.id,
+            forceNewRandomSecond = true
+        )
         val formattedTicket = "#${if (pos.id >= 100000000L) pos.id else 385000000L + pos.id}"
+        val partialCommission = calculateCommissionUsd(pos.symbol, closeLots, isOpenOnly = false)
+        val partialSwap = calculateSwapUsd(pos.symbol, pos.isBuy, closeLots, pos.openTime, closeTimeFormatted)
 
         val closedTrade = HistoryTrade(
             id = pos.id,
@@ -2125,8 +2331,8 @@ class TradingRepository(private val scope: CoroutineScope) {
             profit = proportionalProfit,
             openTime = pos.openTime,
             closeTime = closeTimeFormatted,
-            commission = 0.00,
-            swap = 0.00,
+            commission = partialCommission,
+            swap = partialSwap,
             sl = pos.sl,
             tp = pos.tp,
             ticketId = formattedTicket
@@ -2218,7 +2424,8 @@ class TradingRepository(private val scope: CoroutineScope) {
         tp: Double? = null,
         customTicketId: String? = null
     ): TradePosition {
-        val cleanSymbol = symbol.trim().uppercase(Locale.US).ifBlank { "NDX100" }
+        val rawSymbol = symbol.trim().uppercase(Locale.US).ifBlank { "NAS100" }
+        val cleanSymbol = if (rawSymbol == "NDX100") "NAS100" else rawSymbol
         val safeLots = roundTo2(lots.coerceAtLeast(0.01))
         val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
         val cleanOpenTime = openTime.trim().ifBlank { nowFormatted }
@@ -2336,20 +2543,37 @@ class TradingRepository(private val scope: CoroutineScope) {
         tp: Double? = null,
         customProfit: Double? = null,
         customTicketId: String? = null,
-        hitOutcome: TradeHitOutcome? = null
+        hitOutcome: TradeHitOutcome? = null,
+        customCommission: Double? = null,
+        customSwap: Double? = null
     ): HistoryTrade {
         val uniqueTicketNum = if (existingId == null) generateUniqueTicketNumber() else null
         val targetId = existingId ?: uniqueTicketNum ?: nextPositionId++
         if (existingId == null) {
             localStorage?.saveNextPositionId(nextPositionId)
         }
-        val cleanSymbol = symbol.trim().uppercase(Locale.US).ifBlank { "NDX100" }
+        val rawSymbol = symbol.trim().uppercase(Locale.US).ifBlank { "NAS100" }
+        val cleanSymbol = if (rawSymbol == "NDX100") "NAS100" else rawSymbol
         val safeLots = roundTo2(lots.coerceAtLeast(0.01))
         val computedProfit = customProfit?.let { roundTo2(it) }
             ?: calculateHistoricalTradeProfit(cleanSymbol, isBuy, safeLots, openPrice, closePrice)
         val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
-        val cleanCloseTime = closeTime.trim().ifBlank { nowFormatted }
-        val cleanOpenTime = openTime.trim().ifBlank { cleanCloseTime }
+        val rawCloseTime = closeTime.trim().ifBlank { nowFormatted }
+        val cleanOpenTime = openTime.trim().ifBlank { rawCloseTime }
+        val prevTrade = existingId?.let { id -> _history.value.find { it.id == id } }
+        val shouldForceRandomCloseSec = prevTrade == null ||
+            rawCloseTime == prevTrade.closeTime ||
+            rawCloseTime.take(16) != prevTrade.closeTime.take(16)
+        val cleanCloseTime = randomizeCloseTimeSecond(
+            openTimeStr = cleanOpenTime,
+            closeTimeStr = rawCloseTime,
+            excludeTradeId = targetId,
+            forceNewRandomSecond = shouldForceRandomCloseSec
+        )
+        val computedCommission = customCommission?.let { roundTo2(it) }
+            ?: calculateCommissionUsd(cleanSymbol, safeLots, isOpenOnly = false)
+        val computedSwap = customSwap?.let { roundTo2(it) }
+            ?: calculateSwapUsd(cleanSymbol, isBuy, safeLots, cleanOpenTime, cleanCloseTime)
 
         val candidateTicket = customTicketId?.trim()?.takeIf { it.isNotBlank() }?.let {
             if (it.startsWith("#")) it else "#$it"
@@ -2398,8 +2622,8 @@ class TradingRepository(private val scope: CoroutineScope) {
             profit = computedProfit,
             openTime = cleanOpenTime,
             closeTime = cleanCloseTime,
-            commission = 0.00,
-            swap = 0.00,
+            commission = computedCommission,
+            swap = computedSwap,
             sl = cleanSl,
             tp = cleanTp,
             ticketId = formattedTicket,
@@ -2539,9 +2763,15 @@ class TradingRepository(private val scope: CoroutineScope) {
         }
     }
 
-    fun setDepositAmount(newDeposit: Double) {
+    fun setDepositAmount(newDeposit: Double, newDepositDate: String? = null) {
         val cleanDeposit = roundTo2(newDeposit.coerceAtLeast(0.0))
-        _account.update { it.copy(deposit = cleanDeposit) }
+        _account.update { current ->
+            val updatedDate = newDepositDate?.trim()?.takeIf { it.isNotBlank() } ?: current.depositDate
+            current.copy(
+                deposit = cleanDeposit,
+                depositDate = updatedDate
+            )
+        }
         recalculatePositionsAndAccount(_quotes.value)
         persistActiveAccountLocal()
 
@@ -2647,14 +2877,26 @@ class TradingRepository(private val scope: CoroutineScope) {
         } else {
             historyByAccount[safeKey] ?: localStorage?.loadHistoryForAccount(safeKey).orEmpty()
         }
-        val realizedProfit = roundTo2(targetHist.filter { !it.isWithdrawal }.sumOf { it.profit })
+        val previewAccount = existingAcc.copy(
+            brokerName = brokerName.trim().ifBlank { existingAcc.brokerName },
+            accountId = accountId.trim().ifBlank { existingAcc.accountId },
+            logoType = logoType?.takeIf { it.isNotBlank() } ?: existingAcc.logoType
+        )
+        val closedTrades = targetHist.filter { !it.isWithdrawal }
+        val realizedProfit = roundTo2(closedTrades.sumOf { it.profit })
+        val totalSwap = roundTo2(closedTrades.sumOf {
+            if (it.swap != 0.0) it.swap else calculateSwapUsd(it.symbol, it.isBuy, it.lots, it.openTime, it.closeTime, previewAccount)
+        })
+        val totalCommission = roundTo2(closedTrades.sumOf {
+            if (it.commission != 0.0) it.commission else calculateCommissionUsd(it.symbol, it.lots, isOpenOnly = false, account = previewAccount)
+        })
         val totalWithdrawals = roundTo2(targetHist.filter { it.isWithdrawal }.sumOf { abs(it.profit) })
         val updatedDeposit = if (newBalance != null) {
-            roundTo2((newBalance - realizedProfit + totalWithdrawals).coerceAtLeast(0.0))
+            roundTo2((newBalance - realizedProfit - totalSwap - totalCommission + totalWithdrawals).coerceAtLeast(0.0))
         } else {
             existingAcc.deposit.coerceAtLeast(0.0)
         }
-        val updatedBalance = roundTo2(updatedDeposit + realizedProfit - totalWithdrawals)
+        val updatedBalance = roundTo2(updatedDeposit + realizedProfit + totalSwap + totalCommission - totalWithdrawals)
 
         val updatedAcc = existingAcc.copy(
             key = safeKey,
@@ -2666,6 +2908,8 @@ class TradingRepository(private val scope: CoroutineScope) {
             deposit = updatedDeposit,
             realizedProfit = realizedProfit,
             totalWithdrawal = totalWithdrawals,
+            totalSwap = totalSwap,
+            totalCommission = totalCommission,
             balance = updatedBalance,
             equity = updatedBalance + existingAcc.floatingPnL,
             freeMargin = updatedBalance + existingAcc.floatingPnL - existingAcc.margin,
@@ -2730,6 +2974,7 @@ class TradingRepository(private val scope: CoroutineScope) {
             },
             isReal = isReal,
             deposit = cleanBalance,
+            depositDate = SriLankaMarketHours.formatDateTime(),
             realizedProfit = 0.0,
             totalWithdrawal = 0.0,
             totalSwap = 0.0,

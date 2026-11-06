@@ -60,6 +60,28 @@ import java.text.DecimalFormatSymbols
 import java.util.Locale
 import kotlin.math.abs
 
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import java.text.DateFormatSymbols
+import java.util.Calendar
+
 enum class HistorySegment(val label: String) {
     POSITIONS("POSITIONS"),
     ORDERS("ORDERS"),
@@ -67,14 +89,13 @@ enum class HistorySegment(val label: String) {
 }
 
 enum class HistoryPeriod(
-    val title: String,
-    val subtitle: String?
+    val title: String
 ) {
-    TODAY("Today", "25/10/2026"),
-    LAST_WEEK("Last week", "18/10/2026 - 25/10/2026"),
-    LAST_MONTH("Last month", "25/09/2026 - 25/10/2026"),
-    LAST_3_MONTHS("Last 3 months", "25/07/2026 - 25/10/2026"),
-    CUSTOM("Custom period", null)
+    TODAY("Today"),
+    LAST_WEEK("Last week"),
+    LAST_MONTH("Last month"),
+    LAST_3_MONTHS("Last 3 months"),
+    CUSTOM("Custom period")
 }
 
 private enum class LeftStripeType {
@@ -104,6 +125,16 @@ private data class DisplayHistoryItem(
     val comment: String = ""
 )
 
+private fun startOfDaySriLankaMs(timestampMs: Long = System.currentTimeMillis()): Long {
+    val cal = Calendar.getInstance(SriLankaMarketHours.SRI_LANKA_TIME_ZONE, Locale.US)
+    cal.timeInMillis = timestampMs
+    cal.set(Calendar.HOUR_OF_DAY, 0)
+    cal.set(Calendar.MINUTE, 0)
+    cal.set(Calendar.SECOND, 0)
+    cal.set(Calendar.MILLISECOND, 0)
+    return cal.timeInMillis
+}
+
 @Composable
 fun HistoryScreen(
     viewModel: TradingViewModel,
@@ -113,18 +144,29 @@ fun HistoryScreen(
     val account by viewModel.account.collectAsState()
     val quotes by viewModel.quotes.collectAsState()
 
-    var activeSegment by remember { mutableStateOf(HistorySegment.POSITIONS) }
-    var selectedPeriod by remember { mutableStateOf(HistoryPeriod.LAST_3_MONTHS) }
-    var showPeriodMenu by remember { mutableStateOf(false) }
-    var expandedTradeIds by remember { mutableStateOf(setOf<Long>()) }
-    var sortAscending by remember { mutableStateOf(true) }
+    val activeSegment by viewModel.historyActiveSegment.collectAsState()
+    val selectedPeriod by viewModel.historySelectedPeriod.collectAsState()
+    val expandedTradeIds by viewModel.historyExpandedTradeIds.collectAsState()
+    val sortAscending by viewModel.historySortAscending.collectAsState()
+    val rawCustomStartMs by viewModel.historyCustomStartDateMs.collectAsState()
+    val rawCustomEndMs by viewModel.historyCustomEndDateMs.collectAsState()
 
-    // Map all repository history items (including seeded NDX100 trades, user trades, and withdrawals)
+    var showPeriodMenu by remember { mutableStateOf(false) }
+    var showCustomPeriodDialog by remember { mutableStateOf(false) }
+
+    val todayStartMs = remember(showPeriodMenu, showCustomPeriodDialog, selectedPeriod) {
+        startOfDaySriLankaMs(System.currentTimeMillis())
+    }
+    val customStartDateMs = if (rawCustomStartMs > 0L) rawCustomStartMs else todayStartMs
+    val customEndDateMs = if (rawCustomEndMs > 0L) rawCustomEndMs else todayStartMs
+
+    // Map all repository history items (including seeded NAS100 trades, user trades, and withdrawals)
     val allItems = remember(userHistory, quotes) {
         val quoteDigitsMap = quotes.associate { it.symbol to it.digits }
         userHistory.map { trade ->
-            val digits = quoteDigitsMap[trade.symbol]
-                ?: if (trade.symbol.contains("XAU") || trade.symbol.contains("BTC") || trade.symbol.contains("NDX")) 2 else 5
+            val displaySym = if (trade.symbol.equals("NDX100", ignoreCase = true)) "NAS100" else trade.symbol
+            val digits = quoteDigitsMap[displaySym]
+                ?: if (displaySym.contains("XAU") || displaySym.contains("BTC") || displaySym.contains("NAS") || displaySym.contains("NDX")) 2 else 5
             val resolvedHitOutcome = viewModel.resolveTradeHitOutcome(trade)
             val stripeType = when {
                 trade.isWithdrawal -> LeftStripeType.NONE
@@ -135,7 +177,7 @@ fun HistoryScreen(
             DisplayHistoryItem(
                 id = trade.id,
                 ticketId = trade.ticketId.ifBlank { "#${385000000L + trade.id}" },
-                symbol = trade.symbol,
+                symbol = displaySym,
                 isBuy = trade.isBuy,
                 lots = trade.lots,
                 openPrice = trade.openPrice,
@@ -155,10 +197,17 @@ fun HistoryScreen(
         }
     }
 
-    val displayedItems = remember(selectedPeriod, allItems, sortAscending) {
+    val displayedItems = remember(selectedPeriod, customStartDateMs, customEndDateMs, allItems, sortAscending) {
+        val nowMs = System.currentTimeMillis()
         val filtered = allItems.filter { item ->
             val dateToFilter = item.closeTime.ifBlank { item.openTime }
-            SriLankaMarketHours.isWithinHistoryPeriod(dateToFilter, selectedPeriod.name)
+            SriLankaMarketHours.isWithinHistoryPeriod(
+                dateStr = dateToFilter,
+                periodName = selectedPeriod.name,
+                nowMs = nowMs,
+                customStartMs = customStartDateMs,
+                customEndMs = customEndDateMs
+            )
         }
         val sorted = filtered.sortedWith(
             compareBy<DisplayHistoryItem> {
@@ -171,11 +220,33 @@ fun HistoryScreen(
     val totalProfit = remember(displayedItems) {
         kotlin.math.round(displayedItems.filter { !it.isWithdrawal }.sumOf { it.profit } * 100.0) / 100.0
     }
+    val totalSwap = remember(displayedItems) {
+        kotlin.math.round(displayedItems.filter { !it.isWithdrawal }.sumOf { it.swap } * 100.0) / 100.0
+    }
+    val totalCommission = remember(displayedItems) {
+        kotlin.math.round(displayedItems.filter { !it.isWithdrawal }.sumOf { it.commission } * 100.0) / 100.0
+    }
     val totalWithdrawal = remember(displayedItems) {
         kotlin.math.round(displayedItems.filter { it.isWithdrawal }.sumOf { abs(it.profit) } * 100.0) / 100.0
     }
-    val depositAmount = account.deposit
-    val calculatedBalance = kotlin.math.round((depositAmount + totalProfit - totalWithdrawal) * 100.0) / 100.0
+    val depositAmount = remember(selectedPeriod, customStartDateMs, customEndDateMs, account.deposit, account.depositDate) {
+        val nowMs = System.currentTimeMillis()
+        val isDepositInPeriod = account.deposit > 0.0 &&
+            account.depositDate.isNotBlank() &&
+            SriLankaMarketHours.isWithinHistoryPeriod(
+                dateStr = account.depositDate,
+                periodName = selectedPeriod.name,
+                nowMs = nowMs,
+                customStartMs = customStartDateMs,
+                customEndMs = customEndDateMs
+            )
+        if (isDepositInPeriod) {
+            kotlin.math.round(account.deposit * 100.0) / 100.0
+        } else {
+            0.00
+        }
+    }
+    val calculatedBalance = kotlin.math.round((depositAmount + totalProfit + totalSwap + totalCommission - totalWithdrawal) * 100.0) / 100.0
 
     Box(
         modifier = modifier
@@ -244,7 +315,7 @@ fun HistoryScreen(
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
-                            ) { sortAscending = !sortAscending }
+                            ) { viewModel.toggleHistorySortOrder() }
                             .testTag("history_sort_button"),
                         contentAlignment = Alignment.Center
                     ) {
@@ -266,7 +337,7 @@ fun HistoryScreen(
                             HistoryPeriod.LAST_3_MONTHS -> MT5CalendarMonthIcon(color = Color(0xFF494D52))
                             HistoryPeriod.LAST_WEEK -> MT5CalendarWeekIcon(color = Color(0xFF494D52))
                             HistoryPeriod.LAST_MONTH -> MT5CalendarMonthIcon(color = Color(0xFF494D52))
-                            HistoryPeriod.CUSTOM -> MT5CalendarCustomIcon(color = Color(0xFF494D52))
+                            HistoryPeriod.CUSTOM -> MT5CalendarWeekIcon(color = Color(0xFF494D52))
                             HistoryPeriod.TODAY -> MT5CalendarTodayIcon(color = Color(0xFF494D52))
                         }
                     }
@@ -289,7 +360,7 @@ fun HistoryScreen(
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
-                            ) { activeSegment = segment },
+                            ) { viewModel.setHistoryActiveSegment(segment) },
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.SpaceBetween
                     ) {
@@ -314,9 +385,9 @@ fun HistoryScreen(
             HorizontalDivider(thickness = 0.6.dp, color = Color(0xFFE5E7EB))
 
             // Main History Content
-            val isEmpty = displayedItems.isEmpty() || activeSegment == HistorySegment.ORDERS
+            val isEmpty = (displayedItems.isEmpty() && depositAmount <= 0.0) || activeSegment == HistorySegment.ORDERS
             if (isEmpty) {
-                // Exact Empty History graphic & label matching Screenshot 5
+                // Exact Empty History graphic & label matching Screenshot
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -370,19 +441,19 @@ fun HistoryScreen(
                                 HistoryDottedSummaryRow(
                                     label = "Withdrawal:",
                                     value = String.format(Locale.US, "-%.2f", totalWithdrawal),
-                                    valueColor = Color(0xFFB71C1C)
+                                    valueColor = Color(0xFF111111)
                                 )
                             }
                             Spacer(modifier = Modifier.height(7.5.dp))
                             HistoryDottedSummaryRow(
                                 label = "Swap:",
-                                value = "0.00",
+                                value = String.format(Locale.US, "%.2f", totalSwap),
                                 valueColor = Color(0xFF111111)
                             )
                             Spacer(modifier = Modifier.height(7.5.dp))
                             HistoryDottedSummaryRow(
                                 label = "Commission:",
-                                value = "0.00",
+                                value = String.format(Locale.US, "%.2f", totalCommission),
                                 valueColor = Color(0xFF111111)
                             )
                             Spacer(modifier = Modifier.height(7.5.dp))
@@ -402,11 +473,7 @@ fun HistoryScreen(
                             item = item,
                             isExpanded = isExpanded,
                             onClick = {
-                                expandedTradeIds = if (isExpanded) {
-                                    expandedTradeIds - item.id
-                                } else {
-                                    expandedTradeIds + item.id
-                                }
+                                viewModel.toggleHistoryExpandedTradeId(item.id)
                             }
                         )
                         HorizontalDivider(
@@ -418,8 +485,9 @@ fun HistoryScreen(
             }
         }
 
-        // Top-Right Calendar Period Popup Menu matching Screenshot 3
+        // Top-Right Calendar Period Popup Menu with auto-calculated dates
         if (showPeriodMenu) {
+            val popupNowMs = remember { System.currentTimeMillis() }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -445,12 +513,19 @@ fun HistoryScreen(
                     Column(modifier = Modifier.fillMaxWidth()) {
                         HistoryPeriod.values().forEachIndexed { index, period ->
                             val isSelected = period == selectedPeriod
+                            val dynamicSubtitle = remember(period, popupNowMs) {
+                                SriLankaMarketHours.getHistoryPeriodSubtitle(period.name, popupNowMs)
+                            }
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        selectedPeriod = period
                                         showPeriodMenu = false
+                                        if (period == HistoryPeriod.CUSTOM) {
+                                            showCustomPeriodDialog = true
+                                        } else {
+                                            viewModel.setHistorySelectedPeriod(period)
+                                        }
                                     }
                                     .padding(horizontal = 14.dp, vertical = 11.dp)
                                     .testTag("history_period_${period.name.lowercase()}"),
@@ -472,7 +547,7 @@ fun HistoryScreen(
 
                                 Spacer(modifier = Modifier.width(16.dp))
 
-                                // Title & Date Range Subtitle
+                                // Title & Auto-Calculated Date Range Subtitle
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = period.title,
@@ -481,10 +556,10 @@ fun HistoryScreen(
                                         fontWeight = FontWeight.Normal,
                                         color = Color(0xFF1C1C1E)
                                     )
-                                    if (period.subtitle != null) {
+                                    if (dynamicSubtitle != null) {
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Text(
-                                            text = period.subtitle,
+                                            text = dynamicSubtitle,
                                             fontFamily = MT5RobotoFontFamily,
                                             fontSize = 13.5.sp,
                                             fontWeight = FontWeight.Normal,
@@ -524,6 +599,752 @@ fun HistoryScreen(
                 }
             }
         }
+
+        // Custom Period Calendar & Date Edit Dialog matching the reference screenshots
+        if (showCustomPeriodDialog) {
+            MT5CustomPeriodDialog(
+                initialStartMs = if (selectedPeriod == HistoryPeriod.CUSTOM) customStartDateMs else todayStartMs,
+                initialEndMs = if (selectedPeriod == HistoryPeriod.CUSTOM) customEndDateMs else todayStartMs,
+                todayMs = todayStartMs,
+                onDismiss = { showCustomPeriodDialog = false },
+                onConfirm = { chosenStartMs, chosenEndMs ->
+                    viewModel.setHistoryCustomDateRange(chosenStartMs, chosenEndMs)
+                    showCustomPeriodDialog = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun MT5CustomPeriodDialog(
+    initialStartMs: Long,
+    initialEndMs: Long,
+    todayMs: Long,
+    onDismiss: () -> Unit,
+    onConfirm: (startMs: Long, endMs: Long) -> Unit
+) {
+    var isTextInputMode by remember { mutableStateOf(false) }
+
+    var tempStartMs by remember { mutableLongStateOf(startOfDaySriLankaMs(initialStartMs)) }
+    var tempEndMs by remember { mutableLongStateOf(startOfDaySriLankaMs(initialEndMs)) }
+    var selectionTapStep by remember { mutableIntStateOf(0) }
+
+    val initCal = remember(initialEndMs) {
+        Calendar.getInstance(SriLankaMarketHours.SRI_LANKA_TIME_ZONE, Locale.US).apply {
+            timeInMillis = initialEndMs
+        }
+    }
+    var displayedYear by remember { mutableIntStateOf(initCal.get(Calendar.YEAR)) }
+    var displayedMonth by remember { mutableIntStateOf(initCal.get(Calendar.MONTH)) } // 0..11
+
+    var startDateText by remember {
+        mutableStateOf(SriLankaMarketHours.formatHistoryPeriodDate(tempStartMs))
+    }
+    var endDateText by remember {
+        mutableStateOf(SriLankaMarketHours.formatHistoryPeriodDate(tempEndMs))
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismiss
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(0.90f)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { /* Consume inside clicks */ }
+                    .testTag("history_custom_period_dialog"),
+                shape = RoundedCornerShape(10.dp),
+                color = Color.White,
+                shadowElevation = 10.dp
+            ) {
+                if (!isTextInputMode) {
+                    // =========================================================================
+                    // CALENDAR GRID VIEW (Screenshot 884501698_1359019902828402_7919044604692916607_n.jpg)
+                    // =========================================================================
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 18.dp, bottom = 14.dp)
+                    ) {
+                        // Top-Right Blue Pencil Icon
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 22.dp),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .clickable {
+                                        startDateText = SriLankaMarketHours.formatHistoryPeriodDate(tempStartMs)
+                                        endDateText = SriLankaMarketHours.formatHistoryPeriodDate(tempEndMs)
+                                        isTextInputMode = true
+                                    }
+                                    .testTag("custom_period_pencil_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                MT5EditPencilIcon(color = Color(0xFF1A73E8))
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Month/Year Header ("NOVEMBER 2026 ▼") + Left/Right Month Chevrons ("<"  ">")
+                        val monthNameUpper = remember(displayedYear, displayedMonth) {
+                            val monthName = DateFormatSymbols(Locale.US).months[displayedMonth]
+                            "${monthName.uppercase(Locale.US)} $displayedYear"
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 24.dp, end = 18.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable {
+                                        // Jump back to the month of the currently selected date or today
+                                        val jumpCal = Calendar.getInstance(SriLankaMarketHours.SRI_LANKA_TIME_ZONE, Locale.US).apply {
+                                            timeInMillis = todayMs
+                                        }
+                                        displayedYear = jumpCal.get(Calendar.YEAR)
+                                        displayedMonth = jumpCal.get(Calendar.MONTH)
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = monthNameUpper,
+                                    fontFamily = MT5RobotoFontFamily,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    letterSpacing = 0.6.sp,
+                                    color = Color(0xFF494D52)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                // Downward small dropdown triangle ▼
+                                Canvas(modifier = Modifier.size(9.dp)) {
+                                    val w = size.width
+                                    val h = size.height
+                                    val tri = Path().apply {
+                                        moveTo(w * 0.10f, h * 0.28f)
+                                        lineTo(w * 0.90f, h * 0.28f)
+                                        lineTo(w * 0.50f, h * 0.78f)
+                                        close()
+                                    }
+                                    drawPath(path = tri, color = Color(0xFF494D52))
+                                }
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(18.dp)
+                            ) {
+                                // Previous Month "<"
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            if (displayedMonth == 0) {
+                                                displayedMonth = 11
+                                                displayedYear -= 1
+                                            } else {
+                                                displayedMonth -= 1
+                                            }
+                                        }
+                                        .testTag("custom_period_prev_month"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    MT5ChevronIcon(isLeft = true, color = Color(0xFF494D52))
+                                }
+
+                                // Next Month ">"
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            if (displayedMonth == 11) {
+                                                displayedMonth = 0
+                                                displayedYear += 1
+                                            } else {
+                                                displayedMonth += 1
+                                            }
+                                        }
+                                        .testTag("custom_period_next_month"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    MT5ChevronIcon(isLeft = false, color = Color(0xFF494D52))
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        // Weekday Row: M  T  W  T  F  S  S (Monday-first)
+                        val weekDays = listOf("M", "T", "W", "T", "F", "S", "S")
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            weekDays.forEach { dayLabel ->
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(36.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = dayLabel,
+                                        fontFamily = MT5RobotoFontFamily,
+                                        fontSize = 13.5.sp,
+                                        fontWeight = FontWeight.Normal,
+                                        color = Color(0xFF1F1F1F)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        // Days of Month Grid (Monday = column 0 .. Sunday = column 6)
+                        val monthCells = remember(displayedYear, displayedMonth) {
+                            val cal = Calendar.getInstance(SriLankaMarketHours.SRI_LANKA_TIME_ZONE, Locale.US).apply {
+                                set(Calendar.YEAR, displayedYear)
+                                set(Calendar.MONTH, displayedMonth)
+                                set(Calendar.DAY_OF_MONTH, 1)
+                                set(Calendar.HOUR_OF_DAY, 0)
+                                set(Calendar.MINUTE, 0)
+                                set(Calendar.SECOND, 0)
+                                set(Calendar.MILLISECOND, 0)
+                            }
+                            val firstDayOfWeek = cal.get(Calendar.DAY_OF_WEEK) // Sun=1, Mon=2, ..., Sat=7
+                            val leadingEmptyCount = (firstDayOfWeek + 5) % 7 // Mon=0, Tue=1, ..., Sun=6
+                            val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+
+                            val cells = ArrayList<Pair<Int, Long>?>(leadingEmptyCount + daysInMonth)
+                            repeat(leadingEmptyCount) { cells.add(null) }
+                            for (day in 1..daysInMonth) {
+                                cal.set(Calendar.DAY_OF_MONTH, day)
+                                cells.add(day to cal.timeInMillis)
+                            }
+                            while (cells.size % 7 != 0) {
+                                cells.add(null)
+                            }
+                            cells
+                        }
+
+                        val numWeeks = monthCells.size / 7
+                        val rangeMin = minOf(tempStartMs, tempEndMs)
+                        val rangeMax = maxOf(tempStartMs, tempEndMs)
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            for (weekIdx in 0 until numWeeks) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    for (colIdx in 0 until 7) {
+                                        val cell = monthCells[weekIdx * 7 + colIdx]
+                                        if (cell == null) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(42.dp)
+                                            )
+                                        } else {
+                                            val (dayNum, dayMs) = cell
+                                            val isEndpoint = dayMs == rangeMin || dayMs == rangeMax
+                                            val isBetween = dayMs > rangeMin && dayMs < rangeMax
+                                            val isAfterToday = dayMs > todayMs
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(42.dp)
+                                                    .background(
+                                                        if (isBetween) Color(0xFFE8F0FE) else Color.Transparent
+                                                    )
+                                                    .clickable(
+                                                        interactionSource = remember { MutableInteractionSource() },
+                                                        indication = null
+                                                    ) {
+                                                        if (selectionTapStep == 0) {
+                                                            tempStartMs = dayMs
+                                                            tempEndMs = dayMs
+                                                            selectionTapStep = 1
+                                                        } else {
+                                                            if (dayMs < tempStartMs) {
+                                                                tempEndMs = tempStartMs
+                                                                tempStartMs = dayMs
+                                                            } else {
+                                                                tempEndMs = dayMs
+                                                            }
+                                                            selectionTapStep = 0
+                                                        }
+                                                        startDateText = SriLankaMarketHours.formatHistoryPeriodDate(tempStartMs)
+                                                        endDateText = SriLankaMarketHours.formatHistoryPeriodDate(tempEndMs)
+                                                    }
+                                                    .testTag("calendar_day_$dayNum"),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(40.dp)
+                                                        .background(
+                                                            color = if (isEndpoint) Color(0xFF2B7DE9) else Color.Transparent,
+                                                            shape = CircleShape
+                                                        ),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Text(
+                                                        text = dayNum.toString(),
+                                                        fontFamily = MT5RobotoFontFamily,
+                                                        fontSize = 13.5.sp,
+                                                        fontWeight = FontWeight.Normal,
+                                                        color = when {
+                                                            isEndpoint -> Color.White
+                                                            isAfterToday -> Color(0xFF9AA0A6)
+                                                            else -> Color(0xFF1F1F1F)
+                                                        },
+                                                        textAlign = TextAlign.Center
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(18.dp))
+
+                        // Bottom Action Buttons: CANCEL   OK
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(end = 20.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable(onClick = onDismiss)
+                                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                                    .testTag("custom_period_cancel_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "CANCEL",
+                                    fontFamily = MT5RobotoFontFamily,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    letterSpacing = 0.6.sp,
+                                    color = Color(0xFF1A73E8)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        onConfirm(tempStartMs, tempEndMs)
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                                    .testTag("custom_period_ok_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "OK",
+                                    fontFamily = MT5RobotoFontFamily,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    letterSpacing = 0.6.sp,
+                                    color = Color(0xFF1A73E8)
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    // =========================================================================
+                    // DATE TEXT EDIT MODE (Screenshots 886947043_...jpg & 893973457_...jpg)
+                    // =========================================================================
+                    val focusManager = LocalFocusManager.current
+                    val startFocusRequester = remember { FocusRequester() }
+                    val endFocusRequester = remember { FocusRequester() }
+                    var startFocused by remember { mutableStateOf(true) }
+                    var endFocused by remember { mutableStateOf(false) }
+
+                    LaunchedEffect(Unit) {
+                        try {
+                            startFocusRequester.requestFocus()
+                        } catch (_: Exception) {
+                        }
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 18.dp, bottom = 14.dp)
+                    ) {
+                        // Top-Right Blue Calendar Icon (switches back to Calendar Grid view)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 22.dp),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .clickable {
+                                        SriLankaMarketHours.parseCustomPeriodDateMillis(startDateText)?.let {
+                                            tempStartMs = it
+                                        }
+                                        SriLankaMarketHours.parseCustomPeriodDateMillis(endDateText)?.let {
+                                            tempEndMs = it
+                                            val cal = Calendar.getInstance(SriLankaMarketHours.SRI_LANKA_TIME_ZONE, Locale.US).apply {
+                                                timeInMillis = it
+                                            }
+                                            displayedYear = cal.get(Calendar.YEAR)
+                                            displayedMonth = cal.get(Calendar.MONTH)
+                                        }
+                                        isTextInputMode = false
+                                    }
+                                    .testTag("custom_period_calendar_mode_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                MT5BlueDialogCalendarIcon(color = Color(0xFF1A73E8))
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // "Start date" Outlined Field with Floating Cutout Label
+                        MT5OutlinedDateInputBox(
+                            label = "Start date",
+                            value = startDateText,
+                            onValueChange = { typed ->
+                                startDateText = typed
+                                SriLankaMarketHours.parseCustomPeriodDateMillis(typed)?.let {
+                                    tempStartMs = it
+                                }
+                            },
+                            isFocused = startFocused,
+                            focusRequester = startFocusRequester,
+                            onFocusChanged = { focused ->
+                                startFocused = focused
+                                if (focused) endFocused = false
+                            },
+                            imeAction = ImeAction.Next,
+                            onImeAction = {
+                                try {
+                                    endFocusRequester.requestFocus()
+                                } catch (_: Exception) {
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp)
+                                .testTag("custom_period_start_date_input")
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // "End date" Outlined Field with Floating Cutout Label
+                        MT5OutlinedDateInputBox(
+                            label = "End date",
+                            value = endDateText,
+                            onValueChange = { typed ->
+                                endDateText = typed
+                                SriLankaMarketHours.parseCustomPeriodDateMillis(typed)?.let {
+                                    tempEndMs = it
+                                }
+                            },
+                            isFocused = endFocused,
+                            focusRequester = endFocusRequester,
+                            onFocusChanged = { focused ->
+                                endFocused = focused
+                                if (focused) startFocused = false
+                            },
+                            imeAction = ImeAction.Done,
+                            onImeAction = {
+                                focusManager.clearFocus()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 24.dp)
+                                .testTag("custom_period_end_date_input")
+                        )
+
+                        Spacer(modifier = Modifier.height(22.dp))
+
+                        // Bottom Action Buttons: CANCEL   OK
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(end = 20.dp),
+                            horizontalArrangement = Arrangement.End,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable(onClick = onDismiss)
+                                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                                    .testTag("custom_period_edit_cancel_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "CANCEL",
+                                    fontFamily = MT5RobotoFontFamily,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    letterSpacing = 0.6.sp,
+                                    color = Color(0xFF1A73E8)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        val parsedStart = SriLankaMarketHours.parseCustomPeriodDateMillis(startDateText) ?: tempStartMs
+                                        val parsedEnd = SriLankaMarketHours.parseCustomPeriodDateMillis(endDateText) ?: tempEndMs
+                                        onConfirm(parsedStart, parsedEnd)
+                                    }
+                                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                                    .testTag("custom_period_edit_ok_button"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "OK",
+                                    fontFamily = MT5RobotoFontFamily,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    letterSpacing = 0.6.sp,
+                                    color = Color(0xFF1A73E8)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MT5OutlinedDateInputBox(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    isFocused: Boolean,
+    focusRequester: FocusRequester,
+    onFocusChanged: (Boolean) -> Unit,
+    imeAction: ImeAction,
+    onImeAction: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val borderColor = if (isFocused) Color(0xFF1A73E8) else Color(0xFFDADCE0)
+    val borderWidth = if (isFocused) 2.dp else 1.dp
+    val labelColor = if (isFocused) Color(0xFF1A73E8) else Color(0xFF70757A)
+
+    Box(modifier = modifier.height(62.dp)) {
+        // Outlined box positioned 8.dp from top so floating label sits on the top border line
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 8.dp)
+                .height(54.dp)
+                .border(
+                    width = borderWidth,
+                    color = borderColor,
+                    shape = RoundedCornerShape(4.dp)
+                )
+                .padding(horizontal = 14.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                textStyle = TextStyle(
+                    fontFamily = MT5RobotoFontFamily,
+                    fontSize = 16.5.sp,
+                    fontWeight = FontWeight.Normal,
+                    color = Color(0xFF111111)
+                ),
+                cursorBrush = SolidColor(Color(0xFF1A73E8)),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = imeAction
+                ),
+                keyboardActions = KeyboardActions(
+                    onNext = { onImeAction() },
+                    onDone = { onImeAction() }
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { state -> onFocusChanged(state.isFocused) }
+            )
+        }
+
+        // Floating cutout label ("Start date" / "End date") on top border
+        Box(
+            modifier = Modifier
+                .padding(start = 10.dp)
+                .background(Color.White)
+                .padding(horizontal = 4.dp)
+        ) {
+            Text(
+                text = label,
+                fontFamily = MT5RobotoFontFamily,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Normal,
+                color = labelColor,
+                lineHeight = 14.sp
+            )
+        }
+    }
+}
+
+@Composable
+private fun MT5EditPencilIcon(color: Color) {
+    Canvas(modifier = Modifier.size(21.dp)) {
+        val w = size.width
+        val h = size.height
+
+        // Pencil body (diagonal rectangle)
+        val bodyPath = Path().apply {
+            moveTo(w * 0.16f, h * 0.68f)
+            lineTo(w * 0.64f, h * 0.20f)
+            lineTo(w * 0.80f, h * 0.36f)
+            lineTo(w * 0.32f, h * 0.84f)
+            close()
+        }
+        drawPath(path = bodyPath, color = color)
+
+        // Bottom-left nib triangle
+        val nibPath = Path().apply {
+            moveTo(w * 0.12f, h * 0.88f)
+            lineTo(w * 0.15f, h * 0.71f)
+            lineTo(w * 0.29f, h * 0.85f)
+            close()
+        }
+        drawPath(path = nibPath, color = color)
+
+        // Top-right eraser cap
+        val capPath = Path().apply {
+            moveTo(w * 0.68f, h * 0.16f)
+            lineTo(w * 0.75f, h * 0.09f)
+            lineTo(w * 0.91f, h * 0.25f)
+            lineTo(w * 0.84f, h * 0.32f)
+            close()
+        }
+        drawPath(path = capPath, color = color)
+    }
+}
+
+@Composable
+private fun MT5BlueDialogCalendarIcon(color: Color) {
+    Canvas(modifier = Modifier.size(22.dp)) {
+        val w = size.width
+        val h = size.height
+        val stroke = 1.8.dp.toPx()
+
+        // Outer calendar frame
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.12f, h * 0.18f),
+            size = Size(w * 0.76f, h * 0.72f),
+            cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx()),
+            style = Stroke(width = stroke, join = StrokeJoin.Round)
+        )
+        // Top header bar fill
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.12f, h * 0.18f),
+            size = Size(w * 0.76f, h * 0.18f),
+            cornerRadius = CornerRadius(2.dp.toPx(), 2.dp.toPx())
+        )
+        // Two top rings
+        drawLine(
+            color = color,
+            start = Offset(w * 0.30f, h * 0.08f),
+            end = Offset(w * 0.30f, h * 0.22f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
+        drawLine(
+            color = color,
+            start = Offset(w * 0.70f, h * 0.08f),
+            end = Offset(w * 0.70f, h * 0.22f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
+    }
+}
+
+@Composable
+private fun MT5ChevronIcon(isLeft: Boolean, color: Color) {
+    Canvas(modifier = Modifier.size(16.dp)) {
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            if (isLeft) {
+                moveTo(w * 0.66f, h * 0.18f)
+                lineTo(w * 0.30f, h * 0.50f)
+                lineTo(w * 0.66f, h * 0.82f)
+            } else {
+                moveTo(w * 0.34f, h * 0.18f)
+                lineTo(w * 0.70f, h * 0.50f)
+                lineTo(w * 0.34f, h * 0.82f)
+            }
+        }
+        drawPath(
+            path = path,
+            color = color,
+            style = Stroke(
+                width = 1.7.dp.toPx(),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round
+            )
+        )
     }
 }
 
@@ -652,8 +1473,8 @@ private fun MT5HistoryPositionRow(
                     Text(
                         text = item.comment.ifBlank { "Withdrawal" },
                         fontFamily = MT5RobotoCondensedFontFamily,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.5.sp,
+                        fontWeight = FontWeight.Normal,
                         color = Color(0xFF6E7378),
                         lineHeight = 18.sp,
                         modifier = Modifier.alignByBaseline()

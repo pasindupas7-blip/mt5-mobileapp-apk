@@ -35,6 +35,8 @@ class LocalTradeStorage(context: Context) {
                 if (p.tp != null) put("tp", p.tp)
                 put("profit", p.profit)
                 put("openTime", p.openTime)
+                put("commission", p.commission)
+                put("swap", p.swap)
             }
             arr.put(obj)
         }
@@ -61,7 +63,9 @@ class LocalTradeStorage(context: Context) {
                         sl = sl,
                         tp = tp,
                         profit = obj.optDouble("profit", 0.0),
-                        openTime = obj.optString("openTime", "")
+                        openTime = obj.optString("openTime", ""),
+                        commission = obj.optDouble("commission", 0.0),
+                        swap = obj.optDouble("swap", 0.0)
                     )
                 )
             }
@@ -211,6 +215,7 @@ class LocalTradeStorage(context: Context) {
             put("serverName", account.serverName)
             put("isReal", account.isReal)
             put("deposit", account.deposit)
+            put("depositDate", account.depositDate.ifBlank { "2026.08.10 09:00:00" })
             put("realizedProfit", account.realizedProfit)
             put("totalWithdrawal", account.totalWithdrawal)
             put("totalSwap", account.totalSwap)
@@ -227,6 +232,7 @@ class LocalTradeStorage(context: Context) {
         val savedId = obj.optString("accountId", defaults.accountId)
         val savedServer = obj.optString("serverName", defaults.serverName)
         val savedLogoType = obj.optString("logoType", "AUTO").ifBlank { "AUTO" }
+        val savedDepositDate = obj.optString("depositDate", defaults.depositDate).ifBlank { defaults.depositDate }
 
         val isLegacyDefault = isLegacySingleAccount && key == "main" && (
             savedName == "REAL 21" ||
@@ -237,7 +243,9 @@ class LocalTradeStorage(context: Context) {
         val rawProfit = obj.optDouble("realizedProfit", if (key == "main") defaults.realizedProfit else 0.0)
         val effectiveProfit = if (isLegacySingleAccount && rawProfit == -139.83) defaults.realizedProfit else rawProfit
         val effectiveWithdrawal = obj.optDouble("totalWithdrawal", 0.00)
-        val effectiveBalance = kotlin.math.round((effectiveDeposit + effectiveProfit - effectiveWithdrawal) * 100.0) / 100.0
+        val effectiveSwap = obj.optDouble("totalSwap", 0.00)
+        val effectiveCommission = obj.optDouble("totalCommission", 0.00)
+        val effectiveBalance = kotlin.math.round((effectiveDeposit + effectiveProfit + effectiveSwap + effectiveCommission - effectiveWithdrawal) * 100.0) / 100.0
 
         return AccountInfo(
             balance = effectiveBalance,
@@ -252,10 +260,11 @@ class LocalTradeStorage(context: Context) {
             serverName = if (isLegacyDefault) defaults.serverName else savedServer,
             isReal = obj.optBoolean("isReal", defaults.isReal),
             deposit = effectiveDeposit,
+            depositDate = savedDepositDate,
             realizedProfit = effectiveProfit,
             totalWithdrawal = effectiveWithdrawal,
-            totalSwap = 0.00,
-            totalCommission = 0.00,
+            totalSwap = effectiveSwap,
+            totalCommission = effectiveCommission,
             key = key,
             logoType = savedLogoType
         )

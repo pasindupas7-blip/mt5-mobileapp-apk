@@ -63,18 +63,17 @@ import kotlin.math.cos
 import kotlin.math.sin
 
 private val PreferredChartSymbolOrder = listOf(
-    "EURUSD",
-    "GBPUSD",
-    "USDCHF",
-    "USDJPY",
-    "USDCAD",
-    "AUDUSD",
-    "NZDUSD",
-    "AUDNZD",
-    "AUDCAD",
-    "NDX100",
     "XAUUSD",
-    "BTCUSD"
+    "USDSEK",
+    "USDJPY",
+    "USDCNH",
+    "USDCHF",
+    "USDCAD",
+    "NZDUSD",
+    "NAS100",
+    "GBPUSD",
+    "EURUSD",
+    "AUDUSD"
 )
 
 @Composable
@@ -98,17 +97,27 @@ fun ChartScreen(
     val showSymbolDescription by viewModel.showSymbolDescription.collectAsState()
 
     val symbolPositions = remember(positions, selectedQuote?.symbol) {
-        positions.filter { it.symbol.equals(selectedQuote?.symbol, ignoreCase = true) }
+        val activeSym = selectedQuote?.symbol
+        positions.filter {
+            it.symbol.equals(activeSym, ignoreCase = true) ||
+                (activeSym.equals("NAS100", ignoreCase = true) && it.symbol.equals("NDX100", ignoreCase = true))
+        }
     }
     val symbolHistory = remember(history, selectedQuote?.symbol) {
-        history.filter { !it.isWithdrawal && it.symbol.equals(selectedQuote?.symbol, ignoreCase = true) }
+        val activeSym = selectedQuote?.symbol
+        history.filter {
+            !it.isWithdrawal && (
+                it.symbol.equals(activeSym, ignoreCase = true) ||
+                    (activeSym.equals("NAS100", ignoreCase = true) && it.symbol.equals("NDX100", ignoreCase = true))
+                )
+        }
     }
 
     var showTfBar by remember { mutableStateOf(false) }
     var showSymbolDropdown by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
 
-    // Order symbols so the top 10 match Screenshot 2 (INRUSD..AUDCAD) followed by NDX100, XAUUSD, BTCUSD, etc.
+    // Order symbols to match Fusion Markets & Moneta Markets symbol list
     val orderedChartSymbols = remember(quotes) {
         val byName = quotes.associateBy { it.symbol.uppercase() }
         val result = mutableListOf<String>()

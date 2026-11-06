@@ -516,6 +516,26 @@ fun ClosePositionDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Swap:", color = MT5TextSecondary, fontSize = 13.sp)
+                    Text(String.format(Locale.US, "%.2f USD", position.swap), fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Open Commission (50%):", color = MT5TextSecondary, fontSize = 13.sp)
+                    Text(String.format(Locale.US, "%.2f USD", position.commission), fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
                         .padding(vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
