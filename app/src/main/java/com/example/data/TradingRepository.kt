@@ -1775,64 +1775,6 @@ class TradingRepository(private val scope: CoroutineScope) {
 
         _positions.value = updatedPositions
 
-        // Ensure closed history trades have unique random close seconds (:01..:58) and accurate broker commission & swap
-        val seenCloseSeconds = mutableSetOf<Int>()
-        val minuteFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.US).apply {
-            timeZone = SriLankaMarketHours.SRI_LANKA_TIME_ZONE
-        }
-        val enrichedHistory = _history.value.map { item ->
-            if (item.isWithdrawal) {
-                item
-            } else {
-                val rawCloseMs = SriLankaMarketHours.parseMt5DateTimeMillis(item.closeTime)
-                val rawOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(item.openTime)
-                val fixedCloseTime = if (rawCloseMs > 0L) {
-                    val closeBucketMs = (rawCloseMs / 60_000L) * 60_000L
-                    val openBucketMs = if (rawOpenMs > 0L) (rawOpenMs / 60_000L) * 60_000L else 0L
-                    val openSec = if (rawOpenMs > 0L) ((rawOpenMs - openBucketMs) / 1000L).toInt().coerceIn(0, 59) else -1
-                    val closeSec = ((rawCloseMs - closeBucketMs) / 1000L).toInt().coerceIn(0, 59)
-                    val hasExplicitSec = item.closeTime.trim().count { it == ':' } >= 2
-                    val sameMinInvalid = openBucketMs == closeBucketMs && openSec >= 0 && closeSec <= openSec
-
-                    if (!hasExplicitSec || closeSec == 0 || closeSec == openSec || closeSec in seenCloseSeconds || sameMinInvalid) {
-                        val minSec = if (openBucketMs == closeBucketMs && openSec >= 0) (openSec + 2).coerceAtMost(58) else 1
-                        val maxSec = if (minSec >= 58) 59 else 58
-                        val chosenSec = (minSec..maxSec).filter { it !in seenCloseSeconds && it != openSec }.randomOrNull()
-                            ?: (minSec..maxSec).filter { it != openSec }.randomOrNull()
-                            ?: (minSec..maxSec).random()
-                        seenCloseSeconds.add(chosenSec)
-                        val minLabel = minuteFmt.format(Date(closeBucketMs))
-                        String.format(Locale.US, "%s:%02d", minLabel, chosenSec)
-                    } else {
-                        seenCloseSeconds.add(closeSec)
-                        item.closeTime
-                    }
-                } else {
-                    item.closeTime
-                }
-
-                val normalizedSym = if (item.symbol.equals("NDX100", ignoreCase = true)) "NAS100" else item.symbol
-                val expectedComm = if (item.commission != 0.0) {
-                    item.commission
-                } else {
-                    calculateCommissionUsd(normalizedSym, item.lots, isOpenOnly = false, account = currentAccount)
-                }
-                val expectedSwap = if (item.swap != 0.0) {
-                    item.swap
-                } else {
-                    calculateSwapUsd(normalizedSym, item.isBuy, item.lots, item.openTime, fixedCloseTime, account = currentAccount)
-                }
-                if (expectedComm != item.commission || expectedSwap != item.swap || fixedCloseTime != item.closeTime || normalizedSym != item.symbol) {
-                    item.copy(symbol = normalizedSym, closeTime = fixedCloseTime, commission = expectedComm, swap = expectedSwap)
-                } else {
-                    item
-                }
-            }
-        }
-        if (enrichedHistory != _history.value) {
-            _history.value = enrichedHistory
-        }
-
         val deposit = currentAccount.deposit.coerceAtLeast(0.0)
         val currentHistory = _history.value
         val closedTrades = currentHistory.filter { !it.isWithdrawal }
