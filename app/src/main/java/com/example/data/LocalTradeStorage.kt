@@ -325,7 +325,53 @@ class LocalTradeStorage(context: Context) {
         prefs.edit()
             .remove("${KEY_POSITIONS}_$safeKey")
             .remove("${KEY_HISTORY}_$safeKey")
+            .remove("${KEY_DELETED_POSITIONS}_$safeKey")
+            .remove("${KEY_DELETED_HISTORY}_$safeKey")
             .apply()
+    }
+
+    fun saveDeletedPositionIdsForAccount(accountKey: String, ids: Set<Long>) {
+        val safeKey = accountKey.ifBlank { "main" }
+        val arr = JSONArray()
+        ids.forEach { arr.put(it) }
+        prefs.edit().putString("${KEY_DELETED_POSITIONS}_$safeKey", arr.toString()).apply()
+    }
+
+    fun loadDeletedPositionIdsForAccount(accountKey: String): Set<Long> {
+        val safeKey = accountKey.ifBlank { "main" }
+        val raw = prefs.getString("${KEY_DELETED_POSITIONS}_$safeKey", null) ?: return emptySet()
+        return try {
+            val arr = JSONArray(raw)
+            val set = mutableSetOf<Long>()
+            for (i in 0 until arr.length()) {
+                set.add(arr.getLong(i))
+            }
+            set
+        } catch (e: Exception) {
+            emptySet()
+        }
+    }
+
+    fun saveDeletedHistoryIdsForAccount(accountKey: String, ids: Set<Long>) {
+        val safeKey = accountKey.ifBlank { "main" }
+        val arr = JSONArray()
+        ids.forEach { arr.put(it) }
+        prefs.edit().putString("${KEY_DELETED_HISTORY}_$safeKey", arr.toString()).apply()
+    }
+
+    fun loadDeletedHistoryIdsForAccount(accountKey: String): Set<Long> {
+        val safeKey = accountKey.ifBlank { "main" }
+        val raw = prefs.getString("${KEY_DELETED_HISTORY}_$safeKey", null) ?: return emptySet()
+        return try {
+            val arr = JSONArray(raw)
+            val set = mutableSetOf<Long>()
+            for (i in 0 until arr.length()) {
+                set.add(arr.getLong(i))
+            }
+            set
+        } catch (e: Exception) {
+            emptySet()
+        }
     }
 
     fun saveNextPositionId(nextId: Long) {
@@ -420,6 +466,8 @@ class LocalTradeStorage(context: Context) {
         private const val PREFS_NAME = "mt5_local_trade_storage"
         private const val KEY_POSITIONS = "open_positions_json"
         private const val KEY_HISTORY = "trade_history_json"
+        private const val KEY_DELETED_POSITIONS = "deleted_positions_ids_v1"
+        private const val KEY_DELETED_HISTORY = "deleted_history_ids_v1"
         private const val KEY_ACCOUNT = "account_info_json"
         private const val KEY_ACCOUNTS_LIST = "accounts_list_json_v1"
         private const val KEY_ACTIVE_ACCOUNT_KEY = "active_account_key_v1"

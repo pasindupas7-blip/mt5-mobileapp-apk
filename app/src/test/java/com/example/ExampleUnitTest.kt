@@ -63,7 +63,7 @@ class ExampleUnitTest {
     // User closes the trade
     repo.closePosition(opened.id)
     assertTrue("Trade list should be empty after closing user trade", repo.positions.value.isEmpty())
-    kotlinx.coroutines.cancel(scope.coroutineContext)
+    kotlinx.coroutines.Job.Key.let { scope.coroutineContext[it]?.cancel() }
   }
 
   @Test

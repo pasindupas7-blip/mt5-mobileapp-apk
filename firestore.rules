@@ -57,7 +57,7 @@ service cloud.firestore {
              isNum(data.openPrice) && data.openPrice > 0 &&
              isNum(data.closePrice) && data.closePrice > 0 &&
              isNum(data.profit) &&
-             data.openTime is string && data.openTime.size() >= 1 && data.openTime.size() <= 64 &&
+             data.openTime is string && data.openTime.size() >= 1 && data.openTime.size() <= 160 &&
              data.closeTime is string && data.closeTime.size() >= 1 && data.closeTime.size() <= 64 &&
              isNum(data.commission) &&
              isNum(data.swap) &&
@@ -113,17 +113,19 @@ service cloud.firestore {
                        request.auth.uid == userId &&
                        isValidId(userId) &&
                        isValidId(positionId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
+                         'openPrice', 'currentPrice', 'profit', 'openTime',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
+                         'openPrice', 'currentPrice', 'sl', 'tp', 'profit',
+                         'openTime', 'createdAt', 'updatedAt'
+                       ]) &&
                        isValidPosition(incoming()) &&
                        incoming().userId == existing().userId &&
-                       incoming().ticketId == existing().ticketId &&
-                       incoming().symbol == existing().symbol &&
-                       incoming().isBuy == existing().isBuy &&
-                       incoming().openPrice == existing().openPrice &&
-                       incoming().openTime == existing().openTime &&
-                       incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'lots', 'currentPrice', 'sl', 'tp', 'profit', 'updatedAt'
-                       ]);
+                       incoming().createdAt == existing().createdAt;
 
       allow delete: if isSignedIn() &&
                        request.auth.uid == userId &&
@@ -158,7 +160,23 @@ service cloud.firestore {
                        ]) &&
                        isValidHistoryTrade(incoming());
 
-      allow update: if false;
+      allow update: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       isValidId(userId) &&
+                       isValidId(historyId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
+                         'openPrice', 'closePrice', 'profit', 'openTime',
+                         'closeTime', 'commission', 'swap', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
+                         'openPrice', 'closePrice', 'profit', 'openTime',
+                         'closeTime', 'commission', 'swap', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidHistoryTrade(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt;
 
       allow delete: if isSignedIn() &&
                        request.auth.uid == userId &&

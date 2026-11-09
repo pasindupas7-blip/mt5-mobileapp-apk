@@ -22,6 +22,7 @@ class CloudTradeRepositoryRuleTest : FirestoreEmulatorTestBase() {
         val uid = signInTestUser(ALICE_EMAIL)
         val repository = CloudTradeRepository(firestore, auth)
         val ticketId = (System.currentTimeMillis() % 100000L) + 1000L
+        val secondaryAccKey = "acc_1762620000000_456"
         val pos = TradePosition(
             id = ticketId,
             symbol = "XAUUSD",
@@ -36,16 +37,18 @@ class CloudTradeRepositoryRuleTest : FirestoreEmulatorTestBase() {
         )
 
         withTimeout(DEFAULT_TIMEOUT_MS) {
-            repository.saveOpenPosition(pos, uid)
+            repository.saveOpenPosition(pos, uid, secondaryAccKey)
+            // Update in-place without deleting
+            repository.saveOpenPosition(pos.copy(profit = 15.50, lots = 0.20), uid, secondaryAccKey)
         }
 
         val emitted = withTimeout(FLOW_TIMEOUT_MS) {
-            repository.observeOpenPositions(uid).first { list -> list.any { it.id == ticketId } }
+            repository.observeOpenPositions(uid, secondaryAccKey).first { list -> list.any { it.id == ticketId } }
         }
-        assertTrue(emitted.any { it.id == ticketId && it.symbol == "XAUUSD" })
+        assertTrue(emitted.any { it.id == ticketId && it.symbol == "XAUUSD" && it.lots == 0.20 })
 
         withTimeout(DEFAULT_TIMEOUT_MS) {
-            repository.deleteOpenPosition(ticketId, uid)
+            repository.deleteOpenPosition(ticketId, uid, secondaryAccKey)
         }
     }
 
@@ -54,7 +57,7 @@ class CloudTradeRepositoryRuleTest : FirestoreEmulatorTestBase() {
         val uid = signInTestUser(ALICE_EMAIL)
         val repository = CloudTradeRepository(firestore, auth)
         val ticketId = (System.currentTimeMillis() % 100000L) + 2000L
-        val suffix = UUID.randomUUID().toString().replace("-", "").take(8)
+        val secondaryAccKey = "acc_1762620000000_789"
         val closedTrade = HistoryTrade(
             id = ticketId,
             symbol = "XAUUSD",
@@ -66,17 +69,22 @@ class CloudTradeRepositoryRuleTest : FirestoreEmulatorTestBase() {
             openTime = "2026.10.19 10:00:00",
             closeTime = "2026.10.19 10:25:00",
             commission = -0.50,
-            swap = 0.00
+            swap = 0.00,
+            sl = 4150.00,
+            tp = 4185.00,
+            ticketId = "#387102000"
         )
 
         withTimeout(DEFAULT_TIMEOUT_MS) {
-            repository.addHistoryTrade(closedTrade, suffix, uid)
+            repository.addHistoryTrade(closedTrade, "", uid, secondaryAccKey)
+            // Re-save edited trade in-place without deleting
+            repository.addHistoryTrade(closedTrade.copy(profit = 52.50), "", uid, secondaryAccKey)
         }
 
         val emittedHistory = withTimeout(FLOW_TIMEOUT_MS) {
-            repository.observeTradeHistory(uid).first { list -> list.any { it.id == ticketId } }
+            repository.observeTradeHistory(uid, secondaryAccKey).first { list -> list.any { it.id == ticketId } }
         }
-        assertTrue(emittedHistory.any { it.id == ticketId && it.profit == 40.00 })
+        assertTrue(emittedHistory.any { it.id == ticketId && it.profit == 52.50 })
     }
 
     @Test

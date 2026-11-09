@@ -196,3 +196,26 @@ test("Authenticated user can create and update their own trading account documen
     })
   );
 });
+
+test("Authenticated user can update their own history trade in-place without deleting", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const histRef = aliceDb
+    .collection("users")
+    .doc(ALICE_UID)
+    .collection("history")
+    .doc("hist_acc_1762620000000_456_387100001");
+
+  const initialPayload = {
+    ...validHistoryPayload(ALICE_UID),
+    openTime: "2026.10.19 10:00:00|4150.0|4185.0|#387100001|TP",
+  };
+  await assertSucceeds(histRef.set(initialPayload));
+  await assertSucceeds(
+    histRef.update({
+      profit: 45.25,
+      closePrice: 4170.05,
+      updatedAt: serverTs(),
+    })
+  );
+});
+

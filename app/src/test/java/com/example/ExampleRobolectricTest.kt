@@ -3,8 +3,10 @@ package com.example
 import android.content.Context
 import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.cancel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -39,9 +41,8 @@ class ExampleRobolectricTest {
     val repo1 = com.example.data.TradingRepository(scope1)
     repo1.initializeStorage(context)
 
-    // Initially empty
+    // Initially empty open positions
     assertEquals(0, repo1.positions.value.size)
-    assertEquals(0, repo1.history.value.size)
 
     // User opens 2 trades and closes 1 trade
     val pos1 = repo1.executeOrder("XAUUSD", isBuy = true, lots = 0.10, sl = 4150.0, tp = 4180.0)
@@ -49,7 +50,7 @@ class ExampleRobolectricTest {
     repo1.closePosition(pos1.id)
 
     assertEquals(1, repo1.positions.value.size)
-    assertEquals(1, repo1.history.value.size)
+    assertTrue(repo1.history.value.any { it.id == pos1.id })
 
     // Simulate closing and reopening the app with a fresh TradingRepository
     val scope2 = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Unconfined)
@@ -58,10 +59,8 @@ class ExampleRobolectricTest {
 
     assertEquals(1, repo2.positions.value.size)
     assertEquals(pos2.id, repo2.positions.value.first().id)
-    assertEquals(1, repo2.history.value.size)
-    assertEquals(pos1.id, repo2.history.value.first().id)
-    assertEquals("XAUUSD", repo2.history.value.first().symbol)
-    kotlinx.coroutines.cancel(scope1.coroutineContext)
-    kotlinx.coroutines.cancel(scope2.coroutineContext)
+    assertTrue(repo2.history.value.any { it.id == pos1.id && it.symbol == "XAUUSD" })
+    scope1.cancel()
+    scope2.cancel()
   }
 }

@@ -264,6 +264,7 @@ class TradingViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             val result = GoogleAuthHelper.signInWithGoogleButton(activityContext)
             result.onSuccess { user ->
+                repository.syncNowWithServer()
                 showNotification("Cloud Server Connected: ${user.email ?: "Google Account"}")
             }.onFailure { err ->
                 showNotification("Sign-In: ${err.message ?: "Unable to connect Google Account"}")
@@ -276,6 +277,7 @@ class TradingViewModel @JvmOverloads constructor(
         viewModelScope.launch {
             val result = GoogleAuthHelper.promptSignInIfEligible(activityContext)
             result.onSuccess { user ->
+                repository.syncNowWithServer()
                 showNotification("Cloud Trade History Restored (${user.email ?: "Account"})")
             }
         }
