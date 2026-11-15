@@ -52,17 +52,29 @@ class LocalTradeStorage(context: Context) {
                 val obj = arr.getJSONObject(i)
                 val sl = if (obj.has("sl") && !obj.isNull("sl")) obj.getDouble("sl") else null
                 val tp = if (obj.has("tp") && !obj.isNull("tp")) obj.getDouble("tp") else null
+                val openP = obj.getDouble("openPrice")
+                val currP = obj.optDouble("currentPrice", openP)
+                val prof = obj.optDouble("profit", 0.0)
+                val storedBuy = obj.optBoolean("isBuy", true)
+                val accurateBuy = resolveAccurateTradeIsBuy(
+                    storedIsBuy = storedBuy,
+                    openPrice = openP,
+                    closePrice = currP,
+                    profit = prof,
+                    sl = sl,
+                    tp = tp
+                )
                 list.add(
                     TradePosition(
                         id = obj.getLong("id"),
-                        symbol = obj.getString("symbol"),
-                        isBuy = obj.getBoolean("isBuy"),
+                        symbol = obj.optString("symbol", "XAUUSD").ifBlank { "XAUUSD" },
+                        isBuy = accurateBuy,
                         lots = obj.getDouble("lots"),
-                        openPrice = obj.getDouble("openPrice"),
-                        currentPrice = obj.optDouble("currentPrice", obj.getDouble("openPrice")),
+                        openPrice = openP,
+                        currentPrice = currP,
                         sl = sl,
                         tp = tp,
-                        profit = obj.optDouble("profit", 0.0),
+                        profit = prof,
                         openTime = obj.optString("openTime", ""),
                         commission = obj.optDouble("commission", 0.0),
                         swap = obj.optDouble("swap", 0.0)
@@ -145,15 +157,34 @@ class LocalTradeStorage(context: Context) {
                 val hitOutcome = rawHitOutcome.takeIf { it.isNotBlank() }?.let {
                     runCatching { TradeHitOutcome.valueOf(it) }.getOrNull()
                 }
+                val isWdr = obj.optBoolean("isWithdrawal", false)
+                val openP = obj.getDouble("openPrice")
+                val closeP = obj.getDouble("closePrice")
+                val prof = obj.getDouble("profit")
+                val storedBuy = obj.optBoolean("isBuy", true)
+                val accurateBuy = if (isWdr) {
+                    false
+                } else {
+                    resolveAccurateTradeIsBuy(
+                        storedIsBuy = storedBuy,
+                        openPrice = openP,
+                        closePrice = closeP,
+                        profit = prof,
+                        sl = sl,
+                        tp = tp
+                    )
+                }
+                val rawSym = obj.optString("symbol", "XAUUSD").trim()
+                val cleanSym = if (isWdr) "Balance" else rawSym.ifBlank { "XAUUSD" }
                 list.add(
                     HistoryTrade(
                         id = id,
-                        symbol = obj.getString("symbol"),
-                        isBuy = obj.getBoolean("isBuy"),
+                        symbol = cleanSym,
+                        isBuy = accurateBuy,
                         lots = obj.getDouble("lots"),
-                        openPrice = obj.getDouble("openPrice"),
-                        closePrice = obj.getDouble("closePrice"),
-                        profit = obj.getDouble("profit"),
+                        openPrice = openP,
+                        closePrice = closeP,
+                        profit = prof,
                         openTime = obj.optString("openTime", ""),
                         closeTime = obj.optString("closeTime", ""),
                         commission = obj.optDouble("commission", 0.0),
@@ -161,7 +192,7 @@ class LocalTradeStorage(context: Context) {
                         sl = sl,
                         tp = tp,
                         ticketId = obj.optString("ticketId", "#${385000000L + id}"),
-                        isWithdrawal = obj.optBoolean("isWithdrawal", false),
+                        isWithdrawal = isWdr,
                         comment = obj.optString("comment", ""),
                         hitOutcome = hitOutcome
                     )

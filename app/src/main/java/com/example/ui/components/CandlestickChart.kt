@@ -1777,7 +1777,18 @@ fun CandlestickChart(
                     val closeIdx = if (isBeingEdited && activeEdit != null) activeEdit.closeCandleIdx else marker.closeCandleIdx
                     val openPriceVal = if (isBeingEdited && activeEdit != null) activeEdit.openPrice else marker.trade.openPrice
                     val closePriceVal = if (isBeingEdited && activeEdit != null) activeEdit.closePrice else marker.trade.closePrice
-                    val isBuyVal = if (isBeingEdited && activeEdit != null) activeEdit.isBuy else marker.trade.isBuy
+                    val isBuyVal = if (isBeingEdited && activeEdit != null) {
+                        activeEdit.isBuy
+                    } else {
+                        com.example.data.resolveAccurateTradeIsBuy(
+                            storedIsBuy = marker.trade.isBuy,
+                            openPrice = marker.trade.openPrice,
+                            closePrice = marker.trade.closePrice,
+                            profit = marker.trade.profit,
+                            sl = marker.trade.sl,
+                            tp = marker.trade.tp
+                        )
+                    }
 
                     val openX = candleOriginX - ((n - 1 - openIdx) * totalCandleSlot) + clampedPan
                     val closeX = candleOriginX - ((n - 1 - closeIdx) * totalCandleSlot) + clampedPan

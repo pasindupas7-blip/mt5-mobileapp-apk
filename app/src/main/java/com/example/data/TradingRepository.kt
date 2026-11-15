@@ -827,24 +827,36 @@ class TradingRepository(private val scope: CoroutineScope) {
 
         val hasExplicitSeconds = dateTimeStr.trim().count { it == ':' } >= 2
         val typedSec = ((validMs - minuteBucketMs) / 1000L).toInt().coerceIn(0, 59)
-        val usedCloseSecs = buildSet {
+        val usedSecs = buildSet {
             _history.value.forEach { h ->
                 if (!h.isWithdrawal) {
+                    val hOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(h.openTime)
+                    if (hOpenMs > 0L) {
+                        add(((hOpenMs % 60_000L) / 1000L).toInt())
+                    }
                     val hCloseMs = SriLankaMarketHours.parseMt5DateTimeMillis(h.closeTime)
                     if (hCloseMs > 0L) {
                         add(((hCloseMs % 60_000L) / 1000L).toInt())
                     }
                 }
             }
-            add(openSec)
+            _positions.value.forEach { p ->
+                val pOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(p.openTime)
+                if (pOpenMs > 0L) {
+                    add(((pOpenMs % 60_000L) / 1000L).toInt())
+                }
+            }
         }
-        val randomCloseSec = (1..58).filter { it !in usedCloseSecs }.randomOrNull()
-            ?: (1..58).filter { it != openSec }.random()
+        val randomOpenSec = (1..52).filter { it !in usedSecs }.randomOrNull()
+            ?: (1..52).random()
+        val randomCloseSec = (1..58).filter { it !in usedSecs && it != randomOpenSec }.randomOrNull()
+            ?: (1..58).filter { it != randomOpenSec }.random()
         val effectiveSec = if (hasExplicitSeconds) {
             typedSec
         } else {
-            if (isOpen) firstPeakSec else randomCloseSec
+            if (isOpen) randomOpenSec else randomCloseSec
         }
+        val chipOpenSec = if (isOpen) randomOpenSec else openSec
         val chipCloseSec = if (isOpen) closeSec else randomCloseSec
 
         val rawPriceAtSec = when {
@@ -883,7 +895,7 @@ class TradingRepository(private val scope: CoroutineScope) {
             high = roundDigits(candle.high),
             low = roundDigits(candle.low),
             close = roundDigits(candle.close),
-            openSecondTimestamp = String.format(Locale.US, "%s:%02d", minuteLabel, openSec),
+            openSecondTimestamp = String.format(Locale.US, "%s:%02d", minuteLabel, chipOpenSec),
             highSecondTimestamp = String.format(Locale.US, "%s:%02d", minuteLabel, highSec),
             lowSecondTimestamp = String.format(Locale.US, "%s:%02d", minuteLabel, lowSec),
             closeSecondTimestamp = String.format(Locale.US, "%s:%02d", minuteLabel, chipCloseSec)
@@ -1678,6 +1690,90 @@ class TradingRepository(private val scope: CoroutineScope) {
     }
 
     /**
+     * Ensures a trade's openTime has a realistic random second (:01 .. :58) that:
+     * 1. Never repeats the same second (:ss) as other trades in History or Open Positions,
+     * 2. Is strictly before closeTime when open and close are within the same minute,
+     * 3. Generates a fresh random second when [forceNewRandomSecond] is true or when the input
+     *    has no explicit seconds / has :00 / collides with an existing trade's second.
+     */
+    fun randomizeOpenTimeSecond(
+        openTimeStr: String,
+        closeTimeStr: String? = null,
+        excludeTradeId: Long? = null,
+        forceNewRandomSecond: Boolean = false
+    ): String {
+        val rawOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(openTimeStr)
+        if (rawOpenMs <= 0L) return openTimeStr
+        val rawCloseMs = closeTimeStr?.takeIf { it.isNotBlank() }?.let {
+            SriLankaMarketHours.parseMt5DateTimeMillis(it)
+        } ?: 0L
+
+        val openBucketMs = (rawOpenMs / 60_000L) * 60_000L
+        val closeBucketMs = if (rawCloseMs > 0L) (rawCloseMs / 60_000L) * 60_000L else 0L
+        val currentOpenSec = ((rawOpenMs - openBucketMs) / 1000L).toInt().coerceIn(0, 59)
+        val closeSec = if (rawCloseMs > 0L) ((rawCloseMs - closeBucketMs) / 1000L).toInt().coerceIn(0, 59) else -1
+
+        val usedSecs = buildSet {
+            _history.value.forEach { h ->
+                if (!h.isWithdrawal && h.id != excludeTradeId) {
+                    val hOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(h.openTime)
+                    if (hOpenMs > 0L) {
+                        add(((hOpenMs % 60_000L) / 1000L).toInt())
+                    }
+                    val hCloseMs = SriLankaMarketHours.parseMt5DateTimeMillis(h.closeTime)
+                    if (hCloseMs > 0L) {
+                        add(((hCloseMs % 60_000L) / 1000L).toInt())
+                    }
+                }
+            }
+            _positions.value.forEach { p ->
+                if (p.id != excludeTradeId) {
+                    val pOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(p.openTime)
+                    if (pOpenMs > 0L) {
+                        add(((pOpenMs % 60_000L) / 1000L).toInt())
+                    }
+                }
+            }
+            if (closeSec in 0..59) add(closeSec)
+        }
+
+        val hasExplicitSeconds = openTimeStr.trim().count { it == ':' } >= 2
+        val sameMinute = rawCloseMs > 0L && openBucketMs == closeBucketMs
+        val sameMinuteInvalid = sameMinute && closeSec > 0 && currentOpenSec >= closeSec
+        val needsRandom = forceNewRandomSecond ||
+            !hasExplicitSeconds ||
+            currentOpenSec == 0 ||
+            currentOpenSec in usedSecs ||
+            sameMinuteInvalid
+
+        val finalSec = if (!needsRandom) {
+            currentOpenSec
+        } else {
+            val maxSec = if (sameMinute && closeSec > 2) {
+                (closeSec - 2).coerceIn(1, 56)
+            } else if (sameMinute) {
+                45
+            } else {
+                58
+            }
+            val minSec = 1
+            val primaryPool = (minSec..maxSec).filter { it !in usedSecs && it != currentOpenSec }
+            val fallbackPool = (minSec..maxSec).filter { it != currentOpenSec && it != closeSec }
+            when {
+                primaryPool.isNotEmpty() -> primaryPool.random()
+                fallbackPool.isNotEmpty() -> fallbackPool.random()
+                else -> (minSec..maxSec).random()
+            }
+        }
+
+        val minuteFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.US).apply {
+            timeZone = SriLankaMarketHours.SRI_LANKA_TIME_ZONE
+        }
+        val minuteLabel = minuteFmt.format(Date(openBucketMs))
+        return String.format(Locale.US, "%s:%02d", minuteLabel, finalSec)
+    }
+
+    /**
      * Ensures a trade's closeTime has a realistic random second (:01 .. :58) that:
      * 1. Never repeats the same second (:ss) as other trades in History or its own openTime,
      * 2. Is strictly after openTime when open and close are within the same minute,
@@ -1705,6 +1801,10 @@ class TradingRepository(private val scope: CoroutineScope) {
                     val hCloseMs = SriLankaMarketHours.parseMt5DateTimeMillis(h.closeTime)
                     if (hCloseMs > 0L) {
                         add(((hCloseMs % 60_000L) / 1000L).toInt())
+                    }
+                    val hOpenMs = SriLankaMarketHours.parseMt5DateTimeMillis(h.openTime)
+                    if (hOpenMs > 0L) {
+                        add(((hOpenMs % 60_000L) / 1000L).toInt())
                     }
                 }
             }
@@ -1846,8 +1946,161 @@ class TradingRepository(private val scope: CoroutineScope) {
         local.saveActiveAccountKey(key)
     }
 
+    /**
+     * Repairs an existing [TradePosition] in-place without ever deleting it or altering valid user-entered values:
+     * - Fixes `isBuy` (BUY vs SELL) using mathematical price/profit and SL/TP verification.
+     * - Ensures `symbol` is never blank (defaults to "XAUUSD" or normalizes "NDX100" -> "NAS100").
+     * - Ensures `openTime` has valid `:ss` seconds if seconds were missing or `:00`.
+     */
+    private fun repairExistingPosition(pos: TradePosition): TradePosition {
+        val rawSym = pos.symbol.trim().uppercase(Locale.US).ifBlank { "XAUUSD" }
+        val cleanSym = if (rawSym == "NDX100") "NAS100" else rawSym
+        val accurateBuy = resolveAccurateTradeIsBuy(
+            storedIsBuy = pos.isBuy,
+            openPrice = pos.openPrice,
+            closePrice = pos.currentPrice,
+            profit = pos.profit,
+            sl = pos.sl,
+            tp = pos.tp
+        )
+        val rawOpen = pos.openTime.trim()
+        val repairedOpenTime = if (rawOpen.isNotBlank() && (rawOpen.count { it == ':' } < 2 || rawOpen.endsWith(":00"))) {
+            val detSec = 4 + (abs(pos.id.hashCode()) % 51) // deterministic :04 .. :54
+            String.format(Locale.US, "%s:%02d", rawOpen.take(16), detSec)
+        } else {
+            rawOpen
+        }
+        return if (cleanSym != pos.symbol || accurateBuy != pos.isBuy || repairedOpenTime != pos.openTime) {
+            pos.copy(
+                symbol = cleanSym,
+                isBuy = accurateBuy,
+                openTime = repairedOpenTime
+            )
+        } else {
+            pos
+        }
+    }
+
+    /**
+     * Repairs an existing [HistoryTrade] in-place without ever deleting it or altering valid user-entered values:
+     * - Fixes `isBuy` (BUY vs SELL) using mathematical price/profit and SL/TP verification.
+     * - Ensures `symbol` is never blank (defaults to "XAUUSD" or normalizes "NDX100" -> "NAS100").
+     * - Ensures `ticketId` is never blank.
+     * - Ensures `openTime` and `closeTime` have valid `:ss` seconds if missing or `:00` (while keeping existing valid `:01..:59` seconds untouched).
+     * - Repairs `hitOutcome` (TP_HIT / SL_HIT) if a trade's direction was previously corrupted or `closePrice` matches `tp`/`sl`.
+     */
+    private fun repairExistingHistoryTrade(t: HistoryTrade): HistoryTrade {
+        if (t.isWithdrawal) {
+            val cleanTicket = t.ticketId.ifBlank { "#${if (t.id >= 100000000L) t.id else 385000000L + t.id}" }
+            return t.copy(
+                symbol = "Balance",
+                isBuy = false,
+                ticketId = cleanTicket
+            )
+        }
+
+        val rawSym = t.symbol.trim().uppercase(Locale.US).ifBlank { "XAUUSD" }
+        val cleanSym = if (rawSym == "NDX100") "NAS100" else rawSym
+        val accurateBuy = resolveAccurateTradeIsBuy(
+            storedIsBuy = t.isBuy,
+            openPrice = t.openPrice,
+            closePrice = t.closePrice,
+            profit = t.profit,
+            sl = t.sl,
+            tp = t.tp
+        )
+        val cleanTicket = t.ticketId.ifBlank {
+            "#${if (t.id >= 100000000L) t.id else 385000000L + t.id}"
+        }
+
+        val rawClose = t.closeTime.trim()
+        val repairedCloseTime = if (rawClose.isNotBlank() && (rawClose.count { it == ':' } < 2 || rawClose.endsWith(":00"))) {
+            val detCloseSec = 18 + (abs((t.id * 31L).hashCode()) % 39) // deterministic :18 .. :56
+            String.format(Locale.US, "%s:%02d", rawClose.take(16), detCloseSec)
+        } else {
+            rawClose
+        }
+
+        val rawOpen = t.openTime.trim().ifBlank { repairedCloseTime }
+        val sameMinute = rawOpen.take(16) == repairedCloseTime.take(16)
+        val closeSecVal = repairedCloseTime.takeLast(2).toIntOrNull() ?: 35
+        val repairedOpenTime = if (
+            rawOpen.isNotBlank() &&
+            (rawOpen.count { it == ':' } < 2 || rawOpen.endsWith(":00") || (sameMinute && rawOpen == repairedCloseTime))
+        ) {
+            val maxOpenSec = if (sameMinute && closeSecVal > 3) (closeSecVal - 2).coerceIn(2, 54) else 52
+            val detOpenSec = 2 + (abs((t.id * 17L).hashCode()) % (maxOpenSec - 1).coerceAtLeast(1))
+            String.format(Locale.US, "%s:%02d", rawOpen.take(16), detOpenSec)
+        } else {
+            rawOpen
+        }
+
+        val priceInferredHit = inferHitOutcomeFromPrices(
+            symbol = cleanSym,
+            isBuy = accurateBuy,
+            openPrice = t.openPrice,
+            closePrice = t.closePrice,
+            sl = t.sl,
+            tp = t.tp
+        )
+        val repairedHitOutcome = when {
+            priceInferredHit != TradeHitOutcome.NONE -> priceInferredHit
+            t.isBuy != accurateBuy && (t.sl != null || t.tp != null) -> {
+                checkTpSlHitFromChartData(
+                    symbol = cleanSym,
+                    isBuy = accurateBuy,
+                    openPrice = t.openPrice,
+                    closePrice = t.closePrice,
+                    openTime = repairedOpenTime,
+                    closeTime = repairedCloseTime,
+                    sl = t.sl,
+                    tp = t.tp,
+                    strictWithinTradeWindow = true
+                ).outcome
+            }
+            else -> t.hitOutcome
+        }
+
+        return if (
+            cleanSym != t.symbol ||
+            accurateBuy != t.isBuy ||
+            cleanTicket != t.ticketId ||
+            repairedOpenTime != t.openTime ||
+            repairedCloseTime != t.closeTime ||
+            repairedHitOutcome != t.hitOutcome
+        ) {
+            t.copy(
+                symbol = cleanSym,
+                isBuy = accurateBuy,
+                ticketId = cleanTicket,
+                openTime = repairedOpenTime,
+                closeTime = repairedCloseTime,
+                hitOutcome = repairedHitOutcome
+            )
+        } else {
+            t
+        }
+    }
+
+    private fun mergeTradeRecordsPreservingMetadata(
+        primary: HistoryTrade,
+        secondary: HistoryTrade?
+    ): HistoryTrade {
+        if (secondary == null) return repairExistingHistoryTrade(primary)
+        val merged = primary.copy(
+            sl = primary.sl ?: secondary.sl,
+            tp = primary.tp ?: secondary.tp,
+            hitOutcome = primary.hitOutcome ?: secondary.hitOutcome,
+            ticketId = primary.ticketId.ifBlank { secondary.ticketId },
+            openTime = primary.openTime.ifBlank { secondary.openTime }
+        )
+        return repairExistingHistoryTrade(merged)
+    }
+
     private fun sortHistoryChronologically(list: List<HistoryTrade>): List<HistoryTrade> {
-        return list.sortedWith(
+        return list.map { t ->
+            repairExistingHistoryTrade(t)
+        }.sortedWith(
             compareBy<HistoryTrade> {
                 SriLankaMarketHours.parseMt5DateTimeMillis(it.closeTime)
             }.thenBy { it.id }
@@ -1867,37 +2120,45 @@ class TradingRepository(private val scope: CoroutineScope) {
         _showChartGrid.value = local.loadChartGridEnabled()
         _showSymbolDescription.value = local.loadChartSymbolDescriptionEnabled()
 
-        // 1. Restore all accounts and each account's isolated positions & history from local storage
+        // 1. Restore all accounts and each account's isolated positions & history from local storage.
+        //    Existing user trades are NEVER deleted on startup/update, and all existing trades are auto-repaired.
         val savedAccounts = local.loadAccountsList()
         val savedActiveKey = local.loadActiveAccountKey()
+        val demoSeedIds = initialHistory.map { it.id }.toSet()
 
-        val mainDeletedPos = local.loadDeletedPositionIdsForAccount("main")
-        val mainDeletedHist = local.loadDeletedHistoryIdsForAccount("main").toMutableSet()
-        deletedPositionIds("main").addAll(mainDeletedPos)
-
-        val mainPositions = local.loadPositionsForAccount("main").filter { it.id !in mainDeletedPos }
+        // Only keep deleted IDs for the built-in demo seed trades (9001..9007) so user-added trades
+        // can NEVER be accidentally filtered out or deleted on app update.
         val rawMainHistory = local.loadHistoryForAccount("main")
+        val rawMainIds = rawMainHistory.map { it.id }.toSet()
+        val mainDeletedHist = local.loadDeletedHistoryIdsForAccount("main")
+            .filter { it in demoSeedIds && it !in rawMainIds }
+            .toMutableSet()
         if (local.hasSeededDefaultHistory()) {
-            val rawMainIds = rawMainHistory.map { it.id }.toSet()
             initialHistory.forEach { seed ->
                 if (seed.id !in rawMainIds) {
                     mainDeletedHist.add(seed.id)
                 }
             }
         }
+        deletedPositionIds("main").clear()
+        local.saveDeletedPositionIdsForAccount("main", emptySet())
+        deletedHistoryIds("main").clear()
         deletedHistoryIds("main").addAll(mainDeletedHist)
         local.saveDeletedHistoryIdsForAccount("main", deletedHistoryIds("main"))
 
+        val mainPositions = local.loadPositionsForAccount("main").map { repairExistingPosition(it) }
         val mainHistory = if (!local.hasSeededDefaultHistory()) {
-            val existingIds = rawMainHistory.map { it.id }.toSet()
-            val merged = initialHistory.filter { it.id !in existingIds && it.id !in mainDeletedHist } + rawMainHistory
+            val merged = initialHistory.filter { it.id !in rawMainIds && it.id !in mainDeletedHist } + rawMainHistory
             val sorted = sortHistoryChronologically(merged)
             local.saveHistoryForAccount("main", sorted)
             local.setSeededDefaultHistory(true)
             sorted
         } else {
-            sortHistoryChronologically(rawMainHistory.filter { it.id !in mainDeletedHist })
+            val repaired = sortHistoryChronologically(rawMainHistory)
+            local.saveHistoryForAccount("main", repaired)
+            repaired
         }
+        local.savePositionsForAccount("main", mainPositions)
         positionsByAccount["main"] = mainPositions
         historyByAccount["main"] = mainHistory
 
@@ -1909,23 +2170,30 @@ class TradingRepository(private val scope: CoroutineScope) {
 
         val hydratedAccounts = baseAccounts.map { acc ->
             val accKey = acc.key.ifBlank { "main" }
-            val delPos = local.loadDeletedPositionIdsForAccount(accKey)
-            val delHist = local.loadDeletedHistoryIdsForAccount(accKey)
-            deletedPositionIds(accKey).addAll(delPos)
-            deletedHistoryIds(accKey).addAll(delHist)
+            if (accKey != "main") {
+                deletedPositionIds(accKey).clear()
+                deletedHistoryIds(accKey).clear()
+                local.saveDeletedPositionIdsForAccount(accKey, emptySet())
+                local.saveDeletedHistoryIdsForAccount(accKey, emptySet())
+            }
 
             val accPos = if (accKey == "main") {
                 mainPositions
             } else {
-                local.loadPositionsForAccount(accKey).filter { it.id !in deletedPositionIds(accKey) }
-                    .also { positionsByAccount[accKey] = it }
+                local.loadPositionsForAccount(accKey)
+                    .map { repairExistingPosition(it) }
+                    .also {
+                        positionsByAccount[accKey] = it
+                        local.savePositionsForAccount(accKey, it)
+                    }
             }
             val accHist = if (accKey == "main") {
                 mainHistory
             } else {
-                sortHistoryChronologically(
-                    local.loadHistoryForAccount(accKey).filter { it.id !in deletedHistoryIds(accKey) }
-                ).also { historyByAccount[accKey] = it }
+                sortHistoryChronologically(local.loadHistoryForAccount(accKey)).also {
+                    historyByAccount[accKey] = it
+                    local.saveHistoryForAccount(accKey, it)
+                }
             }
             val closedList = accHist.filter { !it.isWithdrawal }
             val realized = roundTo2(closedList.sumOf { it.profit })
@@ -2032,33 +2300,43 @@ class TradingRepository(private val scope: CoroutineScope) {
         stopCloudListeners()
 
         val targetAccKey = activeAccountKey.ifBlank { "main" }
-        val initialPositionsSnapshot = _positions.value.filter { it.id !in deletedPositionIds(targetAccKey) }
-        val initialHistorySnapshot = _history.value.filter { it.id !in deletedHistoryIds(targetAccKey) }
+        val initialPositionsSnapshot = _positions.value
+            .filter { it.id !in deletedPositionIds(targetAccKey) }
+            .map { repairExistingPosition(it) }
 
         cloudPositionsJob = scope.launch(Dispatchers.IO) {
-            // Propagate any explicit position deletions for this account first
-            for (delId in deletedPositionIds(targetAccKey).toList()) {
-                try {
-                    cloud.deleteOpenPosition(delId, uid, targetAccKey)
-                } catch (ignored: Exception) {
+            // Fetch existing cloud open positions, merge with local without deleting any existing position,
+            // repair all positions, and save repaired positions back to Cloud & Local.
+            val existingServerPositions = try {
+                cloud.fetchOpenPositionsOnce(uid, targetAccKey)
+            } catch (e: Exception) {
+                emptyList()
+            }
+            val combinedInitialPositions = LinkedHashMap<Long, TradePosition>()
+            for (sPos in existingServerPositions) {
+                if (sPos.id !in deletedPositionIds(targetAccKey)) {
+                    combinedInitialPositions[sPos.id] = repairExistingPosition(sPos)
                 }
             }
-
-            // Upload local open positions for the active account
-            for (pos in initialPositionsSnapshot) {
+            for (lPos in initialPositionsSnapshot) {
+                if (lPos.id !in deletedPositionIds(targetAccKey)) {
+                    combinedInitialPositions[lPos.id] = repairExistingPosition(lPos)
+                }
+            }
+            for (pos in combinedInitialPositions.values) {
                 try {
                     cloud.saveOpenPosition(pos, uid, targetAccKey)
                 } catch (ignored: Exception) {
                 }
             }
 
-            // Also upload open positions for any other local accounts in the background
+            // Also upload repaired open positions for any other local accounts in the background
             for ((accKey, posList) in positionsByAccount) {
                 if (accKey != targetAccKey) {
                     val delSet = deletedPositionIds(accKey)
                     for (pos in posList.filter { it.id !in delSet }) {
                         try {
-                            cloud.saveOpenPosition(pos, uid, accKey)
+                            cloud.saveOpenPosition(repairExistingPosition(pos), uid, accKey)
                         } catch (ignored: Exception) {
                         }
                     }
@@ -2070,8 +2348,12 @@ class TradingRepository(private val scope: CoroutineScope) {
                 .collect { serverPositions ->
                     if (activeAccountKey == targetAccKey) {
                         val delSet = deletedPositionIds(targetAccKey)
-                        val validServer = serverPositions.filter { it.id !in delSet }
-                        val currentLocal = _positions.value.filter { it.id !in delSet }
+                        val validServer = serverPositions
+                            .filter { it.id !in delSet }
+                            .map { repairExistingPosition(it) }
+                        val currentLocal = _positions.value
+                            .filter { it.id !in delSet }
+                            .map { repairExistingPosition(it) }
 
                         val mergedMap = LinkedHashMap<Long, TradePosition>()
                         val nowMs = System.currentTimeMillis()
@@ -2118,14 +2400,9 @@ class TradingRepository(private val scope: CoroutineScope) {
 
         cloudHistoryJob = scope.launch(Dispatchers.IO) {
             val delHistSet = deletedHistoryIds(targetAccKey)
-            for (delId in delHistSet.toList()) {
-                try {
-                    cloud.deleteHistoryTrade(delId, uid, targetAccKey)
-                } catch (ignored: Exception) {
-                }
-            }
 
-            // Check existing server history before uploading so untouched demo seed trades don't overwrite cloud history
+            // Fetch existing server history first so we can merge & repair ALL user trades (both Cloud and Local)
+            // without ever deleting any user trade.
             val existingServerHistory = try {
                 cloud.fetchTradeHistoryOnce(uid, targetAccKey)
             } catch (e: Exception) {
@@ -2148,21 +2425,48 @@ class TradingRepository(private val scope: CoroutineScope) {
                 }
             }
 
-            val tradesToUpload = _history.value.filter { it.id !in delHistSet }
-            for (hist in tradesToUpload) {
+            // Combine and auto-repair every trade from both Cloud and Local storage, then persist to both
+            val mergedInitialHistoryMap = LinkedHashMap<Long, HistoryTrade>()
+            for (sTrade in existingServerHistory) {
+                if (sTrade.id !in delHistSet) {
+                    val localMatch = _history.value.find { it.id == sTrade.id }
+                    mergedInitialHistoryMap[sTrade.id] = mergeTradeRecordsPreservingMetadata(sTrade, localMatch)
+                }
+            }
+            for (lTrade in _history.value) {
+                if (lTrade.id !in delHistSet) {
+                    val serverMatch = existingServerHistory.find { it.id == lTrade.id }
+                    val recentlyEdited = System.currentTimeMillis() - (recentlyModifiedHistoryMs[lTrade.id] ?: 0L) < 8_000L
+                    mergedInitialHistoryMap[lTrade.id] = if (serverMatch != null && !recentlyEdited) {
+                        mergeTradeRecordsPreservingMetadata(serverMatch, lTrade)
+                    } else {
+                        mergeTradeRecordsPreservingMetadata(lTrade, serverMatch)
+                    }
+                }
+            }
+
+            val repairedAllHistory = sortHistoryChronologically(mergedInitialHistoryMap.values.toList())
+            if (activeAccountKey == targetAccKey && repairedAllHistory.isNotEmpty()) {
+                _history.value = repairedAllHistory
+                recalculatePositionsAndAccount(_quotes.value)
+                persistActiveAccountLocal()
+            }
+
+            // Upload all repaired trades back to Cloud so Firestore documents permanently store repaired BUY/SELL & metadata
+            for (hist in repairedAllHistory) {
                 try {
                     cloud.addHistoryTrade(hist, userId = uid, accountKey = targetAccKey)
                 } catch (ignored: Exception) {
                 }
             }
 
-            // Also upload history trades for any other local accounts in the background
+            // Also upload repaired history trades for any other local accounts in the background
             for ((accKey, histList) in historyByAccount) {
                 if (accKey != targetAccKey) {
                     val otherDelSet = deletedHistoryIds(accKey)
                     for (hist in histList.filter { it.id !in otherDelSet }) {
                         try {
-                            cloud.addHistoryTrade(hist, userId = uid, accountKey = accKey)
+                            cloud.addHistoryTrade(repairExistingHistoryTrade(hist), userId = uid, accountKey = accKey)
                         } catch (ignored: Exception) {
                         }
                     }
@@ -2174,23 +2478,32 @@ class TradingRepository(private val scope: CoroutineScope) {
                 .collect { serverHistory ->
                     if (activeAccountKey == targetAccKey) {
                         val currentDelSet = deletedHistoryIds(targetAccKey)
-                        val validServer = serverHistory.filter { it.id !in currentDelSet }
-                        val currentLocal = _history.value.filter { it.id !in currentDelSet }
+                        val validServer = serverHistory
+                            .filter { it.id !in currentDelSet }
+                            .map { repairExistingHistoryTrade(it) }
+                        val currentLocal = _history.value
+                            .filter { it.id !in currentDelSet }
+                            .map { repairExistingHistoryTrade(it) }
 
                         val mergedMap = LinkedHashMap<Long, HistoryTrade>()
                         val nowMs = System.currentTimeMillis()
                         for (sTrade in validServer) {
                             val localTrade = currentLocal.find { it.id == sTrade.id }
                             val recentlyEdited = nowMs - (recentlyModifiedHistoryMs[sTrade.id] ?: 0L) < 8_000L
-                            mergedMap[sTrade.id] = if (localTrade != null && recentlyEdited) localTrade else sTrade
+                            mergedMap[sTrade.id] = if (localTrade != null && recentlyEdited) {
+                                mergeTradeRecordsPreservingMetadata(localTrade, sTrade)
+                            } else {
+                                mergeTradeRecordsPreservingMetadata(sTrade, localTrade)
+                            }
                         }
 
                         // Preserve any local non-deleted history trade/withdrawal not yet present on the server and upload it
                         val missingOnServer = mutableListOf<HistoryTrade>()
                         for (lTrade in currentLocal) {
                             if (!mergedMap.containsKey(lTrade.id)) {
-                                mergedMap[lTrade.id] = lTrade
-                                missingOnServer.add(lTrade)
+                                val repairedLocal = repairExistingHistoryTrade(lTrade)
+                                mergedMap[lTrade.id] = repairedLocal
+                                missingOnServer.add(repairedLocal)
                             }
                         }
 
@@ -2253,21 +2566,53 @@ class TradingRepository(private val scope: CoroutineScope) {
                             )
                             currentAccounts.add(restoredAcc)
                             accountsListUpdated = true
-                            // Preload positions and history for restored secondary account
+                            // Preload and auto-repair positions and history for restored secondary account
                             scope.launch(Dispatchers.IO) {
                                 try {
                                     val cloudPos = cloud.fetchOpenPositionsOnce(uid, docKey)
                                         .filter { it.id !in deletedPositionIds(docKey) }
+                                        .map { repairExistingPosition(it) }
+                                    val localPos = positionsByAccount[docKey].orEmpty()
+                                        .filter { it.id !in deletedPositionIds(docKey) }
+                                        .map { repairExistingPosition(it) }
+                                    val mergedPos = (cloudPos + localPos).distinctBy { it.id }
+                                    if (mergedPos.isNotEmpty() || positionsByAccount[docKey].isNullOrEmpty()) {
+                                        positionsByAccount[docKey] = mergedPos
+                                        localStorage?.savePositionsForAccount(docKey, mergedPos)
+                                        for (pos in mergedPos) {
+                                            try {
+                                                cloud.saveOpenPosition(pos, uid, docKey)
+                                            } catch (ignored: Exception) {
+                                            }
+                                        }
+                                    }
+
                                     val cloudHist = cloud.fetchTradeHistoryOnce(uid, docKey)
                                         .filter { it.id !in deletedHistoryIds(docKey) }
-                                    if (cloudPos.isNotEmpty() || positionsByAccount[docKey].isNullOrEmpty()) {
-                                        positionsByAccount[docKey] = cloudPos
-                                        localStorage?.savePositionsForAccount(docKey, cloudPos)
+                                        .map { repairExistingHistoryTrade(it) }
+                                    val localHist = historyByAccount[docKey].orEmpty()
+                                        .filter { it.id !in deletedHistoryIds(docKey) }
+                                        .map { repairExistingHistoryTrade(it) }
+                                    val mergedHistMap = LinkedHashMap<Long, HistoryTrade>()
+                                    for (cTrade in cloudHist) {
+                                        val lMatch = localHist.find { it.id == cTrade.id }
+                                        mergedHistMap[cTrade.id] = mergeTradeRecordsPreservingMetadata(cTrade, lMatch)
                                     }
-                                    if (cloudHist.isNotEmpty() || historyByAccount[docKey].isNullOrEmpty()) {
-                                        val sorted = sortHistoryChronologically(cloudHist)
+                                    for (lTrade in localHist) {
+                                        if (!mergedHistMap.containsKey(lTrade.id)) {
+                                            mergedHistMap[lTrade.id] = lTrade
+                                        }
+                                    }
+                                    val sorted = sortHistoryChronologically(mergedHistMap.values.toList())
+                                    if (sorted.isNotEmpty() || historyByAccount[docKey].isNullOrEmpty()) {
                                         historyByAccount[docKey] = sorted
                                         localStorage?.saveHistoryForAccount(docKey, sorted)
+                                        for (hist in sorted) {
+                                            try {
+                                                cloud.addHistoryTrade(hist, userId = uid, accountKey = docKey)
+                                            } catch (ignored: Exception) {
+                                            }
+                                        }
                                     }
                                 } catch (ignored: Exception) {
                                 }
@@ -2619,7 +2964,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val cleanSymbol = if (rawSymbol == "NDX100") "NAS100" else rawSymbol
         val safeLots = roundTo2(lots.coerceAtLeast(0.01))
         val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
-        val cleanOpenTime = openTime.trim().ifBlank { nowFormatted }
+        val rawOpenTime = openTime.trim().ifBlank { nowFormatted }
 
         val parsedTicketNum = customTicketId?.removePrefix("#")?.trim()?.toLongOrNull()
         val targetId = when {
@@ -2632,6 +2977,20 @@ class TradingRepository(private val scope: CoroutineScope) {
             }
             else -> generateUniqueTicketNumber()
         }
+
+        val prevOpenTime = existingId?.let { id ->
+            _positions.value.find { it.id == id }?.openTime
+                ?: _history.value.find { it.id == id }?.openTime
+        }
+        val shouldForceRandomOpenSec = prevOpenTime == null ||
+            rawOpenTime == prevOpenTime ||
+            rawOpenTime.take(16) != prevOpenTime.take(16)
+        val cleanOpenTime = randomizeOpenTimeSecond(
+            openTimeStr = rawOpenTime,
+            closeTimeStr = null,
+            excludeTradeId = targetId,
+            forceNewRandomSecond = shouldForceRandomOpenSec
+        )
 
         val quote = _quotes.value.find { it.symbol.equals(cleanSymbol, ignoreCase = true) }
         val liveClosePrice = if (quote != null) {
@@ -2756,8 +3115,17 @@ class TradingRepository(private val scope: CoroutineScope) {
             ?: calculateHistoricalTradeProfit(cleanSymbol, isBuy, safeLots, openPrice, closePrice)
         val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
         val rawCloseTime = closeTime.trim().ifBlank { nowFormatted }
-        val cleanOpenTime = openTime.trim().ifBlank { rawCloseTime }
+        val rawOpenTime = openTime.trim().ifBlank { rawCloseTime }
         val prevTrade = existingId?.let { id -> _history.value.find { it.id == id } }
+        val shouldForceRandomOpenSec = prevTrade == null ||
+            rawOpenTime == prevTrade.openTime ||
+            rawOpenTime.take(16) != prevTrade.openTime.take(16)
+        val cleanOpenTime = randomizeOpenTimeSecond(
+            openTimeStr = rawOpenTime,
+            closeTimeStr = rawCloseTime,
+            excludeTradeId = targetId,
+            forceNewRandomSecond = shouldForceRandomOpenSec
+        )
         val shouldForceRandomCloseSec = prevTrade == null ||
             rawCloseTime == prevTrade.closeTime ||
             rawCloseTime.take(16) != prevTrade.closeTime.take(16)
@@ -2972,7 +3340,12 @@ class TradingRepository(private val scope: CoroutineScope) {
     fun setDepositAmount(newDeposit: Double, newDepositDate: String? = null) {
         val cleanDeposit = roundTo2(newDeposit.coerceAtLeast(0.0))
         _account.update { current ->
-            val updatedDate = newDepositDate?.trim()?.takeIf { it.isNotBlank() } ?: current.depositDate
+            val rawDate = newDepositDate?.trim()?.takeIf { it.isNotBlank() } ?: current.depositDate
+            val updatedDate = if (rawDate.count { it == ':' } < 2 || rawDate.endsWith(":00")) {
+                randomizeOpenTimeSecond(rawDate, null, null, forceNewRandomSecond = true)
+            } else {
+                rawDate
+            }
             current.copy(
                 deposit = cleanDeposit,
                 depositDate = updatedDate

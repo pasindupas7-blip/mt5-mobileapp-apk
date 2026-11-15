@@ -375,10 +375,19 @@ fun TradeHistoryControlSection(
         val closedEntries = history
             .filter { !it.isWithdrawal }
             .map { t ->
+                val cleanSym = t.symbol.trim().ifBlank { "XAUUSD" }
+                val accurateBuy = com.example.data.resolveAccurateTradeIsBuy(
+                    storedIsBuy = t.isBuy,
+                    openPrice = t.openPrice,
+                    closePrice = t.closePrice,
+                    profit = t.profit,
+                    sl = t.sl,
+                    tp = t.tp
+                )
                 AboutTradeEntry(
                     id = t.id,
-                    symbol = t.symbol,
-                    isBuy = t.isBuy,
+                    symbol = cleanSym,
+                    isBuy = accurateBuy,
                     lots = t.lots,
                     openPrice = t.openPrice,
                     closeOrCurrentPrice = t.closePrice,
@@ -389,16 +398,25 @@ fun TradeHistoryControlSection(
                     tp = t.tp,
                     ticketId = t.ticketId,
                     isRunning = false,
-                    hitOutcome = viewModel.resolveTradeHitOutcome(t),
+                    hitOutcome = viewModel.resolveTradeHitOutcome(t.copy(symbol = cleanSym, isBuy = accurateBuy)),
                     commission = t.commission,
                     swap = t.swap
                 )
             }
         val runningEntries = positions.map { p ->
+            val cleanSym = p.symbol.trim().ifBlank { "XAUUSD" }
+            val accurateBuy = com.example.data.resolveAccurateTradeIsBuy(
+                storedIsBuy = p.isBuy,
+                openPrice = p.openPrice,
+                closePrice = p.currentPrice,
+                profit = p.profit,
+                sl = p.sl,
+                tp = p.tp
+            )
             AboutTradeEntry(
                 id = p.id,
-                symbol = p.symbol,
-                isBuy = p.isBuy,
+                symbol = cleanSym,
+                isBuy = accurateBuy,
                 lots = p.lots,
                 openPrice = p.openPrice,
                 closeOrCurrentPrice = p.currentPrice,
@@ -556,7 +574,7 @@ fun TradeHistoryControlSection(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Sub-Tab Selector: TRADES vs WITHDRAWALS
+        // Sub-Tab Selector: TRADES vs DEPOSIT & WITHDRAWALS
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -592,9 +610,9 @@ fun TradeHistoryControlSection(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "WITHDRAWALS (${withdrawalItems.size})",
+                    text = "DEPOSIT & WITHDRAWALS (${withdrawalItems.size})",
                     color = if (selectedControlTab == 1) MtBlueText else MtGrayText,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -603,6 +621,58 @@ fun TradeHistoryControlSection(
         Spacer(modifier = Modifier.height(12.dp))
 
         if (selectedControlTab == 0) {
+            // 1st Deposit (Base Deposit) Quick Row in History Control
+            Surface(
+                color = Color(0xFFF8FAFF),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, MtBlue.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
+                    .clickable { selectedControlTab = 1 }
+                    .testTag("about_first_deposit_summary_row")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "1st Deposit (Base Deposit in History)",
+                            color = MtDarkText,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "Date/Time: ${account.depositDate.ifBlank { "2026.08.10 09:00:18" }}",
+                            color = MtGrayText,
+                            fontSize = 11.5.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = String.format(Locale.US, "+$%,.2f", account.deposit),
+                            color = MtBlueText,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Edit 1st Deposit Date & Amount",
+                            tint = MtBlueText,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
             // TRADES MANAGEMENT TAB
             Button(
                 onClick = {
@@ -678,6 +748,13 @@ fun TradeHistoryControlSection(
                         .fillMaxWidth()
                         .padding(10.dp)
                 ) {
+                    Text(
+                        text = "1st Deposit (Base Deposit in History List)",
+                        color = MtDarkText,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -685,7 +762,7 @@ fun TradeHistoryControlSection(
                         OutlinedTextField(
                             value = depositInput,
                             onValueChange = { depositInput = it },
-                            label = { Text("Base Deposit ($)", fontSize = 12.sp) },
+                            label = { Text("1st Deposit ($)", fontSize = 12.sp) },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier
@@ -697,11 +774,11 @@ fun TradeHistoryControlSection(
                             onClick = {
                                 val parsed = depositInput.toDoubleOrNull()
                                 if (parsed != null && parsed >= 0.0) {
-                                    val cleanDepositDate = depositDateInput.trim().ifBlank { "2026.08.10 09:00:00" }
+                                    val cleanDepositDate = depositDateInput.trim().ifBlank { "2026.08.10 09:00:18" }
                                     viewModel.setDepositAmount(parsed, cleanDepositDate)
                                     statusBanner = String.format(
                                         Locale.US,
-                                        "Deposit updated to $%.2f (%s) & synced",
+                                        "1st Deposit updated to $%.2f (%s) & shown in History",
                                         parsed,
                                         cleanDepositDate
                                     )
@@ -713,7 +790,7 @@ fun TradeHistoryControlSection(
                                 .height(48.dp)
                                 .testTag("save_deposit_button")
                         ) {
-                            Text("Update Deposit", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Save Deposit", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
 
@@ -722,7 +799,7 @@ fun TradeHistoryControlSection(
                     OutlinedTextField(
                         value = depositDateInput,
                         onValueChange = { depositDateInput = it },
-                        label = { Text("Deposit Date/Time (yyyy.MM.dd HH:mm:ss)", fontSize = 12.sp) },
+                        label = { Text("1st Deposit Date & Time (yyyy.MM.dd HH:mm:ss)", fontSize = 12.sp) },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -732,7 +809,9 @@ fun TradeHistoryControlSection(
                     Spacer(modifier = Modifier.height(6.dp))
 
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -742,13 +821,38 @@ fun TradeHistoryControlSection(
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold
                         )
+                        if (tradeItems.isNotEmpty()) {
+                            Surface(
+                                color = Color(0xFFE8F0FE),
+                                shape = RoundedCornerShape(6.dp),
+                                modifier = Modifier
+                                    .border(1.dp, MtBlue, RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        val firstTradeTime = tradeItems.first().openTime.ifBlank { tradeItems.first().closeTime }
+                                        val firstMs = SriLankaMarketHours.parseMt5DateTimeMillis(firstTradeTime)
+                                        val beforeMs = (firstMs - 15 * 60_000L).coerceAtLeast(1000L)
+                                        val basePrefix = SriLankaMarketHours.formatDateTime(beforeMs).take(16)
+                                        val randSec = kotlin.random.Random.nextInt(1, 59)
+                                        depositDateInput = String.format(Locale.US, "%s:%02d", basePrefix, randSec)
+                                    }
+                            ) {
+                                Text(
+                                    text = "Before 1st Trade",
+                                    color = MtBlueText,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
                         Surface(
                             color = Color.White,
                             shape = RoundedCornerShape(6.dp),
                             modifier = Modifier
                                 .border(1.dp, MtDivider, RoundedCornerShape(6.dp))
                                 .clickable {
-                                    depositDateInput = "2026.08.10 09:00:00"
+                                    val randSec = kotlin.random.Random.nextInt(1, 59)
+                                    depositDateInput = String.format(Locale.US, "2026.08.10 09:00:%02d", randSec)
                                 }
                         ) {
                             Text(
@@ -1750,11 +1854,16 @@ private fun TradeHistoryEditDialog(
                         if (openCandleLookup != null) {
                             TextButton(
                                 onClick = {
-                                    openTimeText = openCandleLookup.suggestedTimestamp
+                                    val freshLookup = viewModel.lookupMinuteChartCandle(
+                                        symbol,
+                                        openTimeText.trim().take(16),
+                                        isOpen = true
+                                    ) ?: openCandleLookup
+                                    openTimeText = freshLookup.suggestedTimestamp
                                     openPriceText = String.format(
                                         Locale.US,
-                                        "%.${openCandleLookup.digits}f",
-                                        openCandleLookup.priceAtSecond
+                                        "%.${freshLookup.digits}f",
+                                        freshLookup.priceAtSecond
                                     )
                                 },
                                 contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)

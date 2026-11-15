@@ -13,6 +13,7 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.PropertyName
 import com.google.firebase.firestore.ServerTimestamp
 import java.math.BigDecimal
 import kotlin.math.abs
@@ -34,13 +35,59 @@ private fun formatCompactDouble(value: Double?): String {
     }
 }
 
+/**
+ * Resolves the accurate BUY/SELL direction for a trade.
+ * Repairs trades whose boolean `isBuy` field was previously defaulted to `true` by Firestore's JavaBean
+ * mapper when `openPrice != closePrice` and `profit != 0.0` (or when S/L or T/P clearly indicates side).
+ */
+fun resolveAccurateTradeIsBuy(
+    storedIsBuy: Boolean,
+    openPrice: Double,
+    closePrice: Double,
+    profit: Double,
+    sl: Double? = null,
+    tp: Double? = null,
+    explicitSideCode: String? = null
+): Boolean {
+    val safeOpen = openPrice.safeFinite(0.0)
+    val safeClose = closePrice.safeFinite(0.0)
+    val safeProfit = profit.safeFinite(0.0)
+    // 1. Definitive mathematical verification from Entry Price, Exit/Current Price, and Profit:
+    //    - Price rose (close > open) & profit > 0  => BUY
+    //    - Price fell (close < open) & profit > 0  => SELL
+    //    - Price fell (close < open) & profit < 0  => BUY
+    //    - Price rose (close > open) & profit < 0  => SELL
+    if (safeOpen > 0.0 && safeClose > 0.0 && abs(safeClose - safeOpen) > 1e-6 && abs(safeProfit) >= 0.005) {
+        return if (safeProfit > 0.0) {
+            safeClose > safeOpen
+        } else {
+            safeClose < safeOpen
+        }
+    }
+    // 2. Definitive verification from Take Profit (T/P) or Stop Loss (S/L) relative to Entry Price:
+    val validTp = tp?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }
+    if (safeOpen > 0.0 && validTp != null && abs(validTp - safeOpen) > 1e-6) {
+        return validTp > safeOpen
+    }
+    val validSl = sl?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }
+    if (safeOpen > 0.0 && validSl != null && abs(validSl - safeOpen) > 1e-6) {
+        return validSl < safeOpen
+    }
+    // 3. Fallback to explicit side metadata or stored boolean when profit is 0.0 and no SL/TP is set:
+    when (explicitSideCode?.trim()?.uppercase()) {
+        "SELL", "S", "0", "FALSE" -> return false
+        "BUY", "B", "1", "TRUE" -> return true
+    }
+    return storedIsBuy
+}
+
 @IgnoreExtraProperties
 data class TradePositionDoc(
     @DocumentId val id: String = "",
     val userId: String = "",
     val ticketId: Long = 0L,
     val symbol: String = "",
-    val isBuy: Boolean = true,
+    @get:PropertyName("isBuy") val isBuy: Boolean = true,
     val lots: Double = 0.0,
     val openPrice: Double = 0.0,
     val currentPrice: Double = 0.0,
@@ -51,21 +98,34 @@ data class TradePositionDoc(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
-    fun toDomain(): TradePosition {
+    fun toDomain(explicitIsBuy: Boolean? = null): TradePosition {
         val fallbackId = id.substringAfterLast("_").toLongOrNull()
             ?: id.filter { it.isDigit() }.takeLast(12).toLongOrNull()
             ?: 1001L
         val resolvedId = if (ticketId > 0L) ticketId else fallbackId
+        val safeOpen = openPrice.safeFinite(1.0).coerceAtLeast(0.00001)
+        val safeCurrent = currentPrice.safeFinite(safeOpen).coerceAtLeast(0.00001)
+        val safeSl = sl?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }
+        val safeTp = tp?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }
+        val safeProfit = profit.safeFinite(0.0)
+        val resolvedBuy = resolveAccurateTradeIsBuy(
+            storedIsBuy = explicitIsBuy ?: isBuy,
+            openPrice = safeOpen,
+            closePrice = safeCurrent,
+            profit = safeProfit,
+            sl = safeSl,
+            tp = safeTp
+        )
         return TradePosition(
             id = resolvedId,
             symbol = symbol.ifBlank { "XAUUSD" },
-            isBuy = isBuy,
+            isBuy = resolvedBuy,
             lots = lots.safeFinite(0.01).coerceAtLeast(0.01),
-            openPrice = openPrice.safeFinite(1.0).coerceAtLeast(0.00001),
-            currentPrice = currentPrice.safeFinite(openPrice.safeFinite(1.0)).coerceAtLeast(0.00001),
-            sl = sl?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 },
-            tp = tp?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 },
-            profit = profit.safeFinite(0.0),
+            openPrice = safeOpen,
+            currentPrice = safeCurrent,
+            sl = safeSl,
+            tp = safeTp,
+            profit = safeProfit,
             openTime = openTime.ifBlank { SriLankaMarketHours.formatDateTime() }
         )
     }
@@ -77,7 +137,7 @@ data class HistoryTradeDoc(
     val userId: String = "",
     val ticketId: Long = 0L,
     val symbol: String = "",
-    val isBuy: Boolean = true,
+    @get:PropertyName("isBuy") val isBuy: Boolean = true,
     val lots: Double = 0.0,
     val openPrice: Double = 0.0,
     val closePrice: Double = 0.0,
@@ -89,7 +149,7 @@ data class HistoryTradeDoc(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
-    fun toDomain(): HistoryTrade {
+    fun toDomain(explicitIsBuy: Boolean? = null): HistoryTrade {
         val fallbackId = id.substringAfterLast("_").toLongOrNull()
             ?: id.filter { it.isDigit() }.takeLast(12).toLongOrNull()
             ?: 2001L
@@ -126,7 +186,7 @@ data class HistoryTradeDoc(
             )
         }
 
-        // Standard closed trade: openTime may optionally encode "openTime|sl|tp|ticketId|hitCode"
+        // Standard closed trade: openTime may optionally encode "openTime|sl|tp|ticketId|hitCode|sideCode"
         val parts = openTime.split("|")
         val cleanOpenTime = parts.firstOrNull()?.ifBlank { closeTime } ?: closeTime
         val parsedSl = parts.getOrNull(1)?.toDoubleOrNull()?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }
@@ -139,15 +199,28 @@ data class HistoryTradeDoc(
             "NO", "NONE" -> TradeHitOutcome.NONE
             else -> null
         }
+        val parsedSideCode = parts.getOrNull(5)?.trim()?.takeIf { it.isNotBlank() }
+        val safeOpenPrice = openPrice.safeFinite(1.0).coerceAtLeast(0.00001)
+        val safeClosePrice = closePrice.safeFinite(1.0).coerceAtLeast(0.00001)
+        val safeProfit = profit.safeFinite(0.0)
+        val resolvedIsBuy = resolveAccurateTradeIsBuy(
+            storedIsBuy = explicitIsBuy ?: isBuy,
+            openPrice = safeOpenPrice,
+            closePrice = safeClosePrice,
+            profit = safeProfit,
+            sl = parsedSl,
+            tp = parsedTp,
+            explicitSideCode = parsedSideCode
+        )
 
         return HistoryTrade(
             id = domainId,
             symbol = symbol.ifBlank { "XAUUSD" },
-            isBuy = isBuy,
+            isBuy = resolvedIsBuy,
             lots = lots.safeFinite(0.01).coerceAtLeast(0.01),
-            openPrice = openPrice.safeFinite(1.0).coerceAtLeast(0.00001),
-            closePrice = closePrice.safeFinite(1.0).coerceAtLeast(0.00001),
-            profit = profit.safeFinite(0.0),
+            openPrice = safeOpenPrice,
+            closePrice = safeClosePrice,
+            profit = safeProfit,
             openTime = cleanOpenTime,
             closeTime = closeTime,
             commission = commission.safeFinite(0.0),
@@ -175,7 +248,7 @@ data class AccountDoc(
     val brokerName: String = "Moneta Markets (Pty) Ltd",
     val accountId: String = "36054607 - MonetaMarkets-Live",
     val serverName: String = "AS08, Hedge",
-    val isReal: Boolean = true,
+    @get:PropertyName("isReal") val isReal: Boolean = true,
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
@@ -268,6 +341,54 @@ class CloudTradeRepository(
         return if (docSuffix.isNotBlank()) "${base}_$docSuffix" else base
     }
 
+    private fun mapPositionDocuments(
+        documents: List<DocumentSnapshot>,
+        safeKey: String
+    ): List<TradePosition> {
+        return documents
+            .filter { isDocForAccount(it.id, "pos", safeKey) }
+            .mapNotNull { snap ->
+                val doc = snap.toObject(
+                    TradePositionDoc::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ) ?: return@mapNotNull null
+                val rawBuy = snap.getBoolean("isBuy") ?: snap.getBoolean("buy")
+                Pair(doc, rawBuy)
+            }
+            .sortedByDescending { (doc, _) -> doc.createdAt ?: Timestamp(0, 0) }
+            .map { (doc, rawBuy) -> doc.toDomain(explicitIsBuy = rawBuy) }
+            .distinctBy { it.id }
+    }
+
+    private fun mapHistoryDocuments(
+        documents: List<DocumentSnapshot>,
+        safeKey: String
+    ): List<HistoryTrade> {
+        val pairs = documents
+            .filter { isDocForAccount(it.id, "hist", safeKey) }
+            .mapNotNull { snap ->
+                val doc = snap.toObject(
+                    HistoryTradeDoc::class.java,
+                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                ) ?: return@mapNotNull null
+                val rawBuy = snap.getBoolean("isBuy") ?: snap.getBoolean("buy")
+                Pair(doc, rawBuy)
+            }
+            .sortedBy { (doc, _) -> doc.updatedAt ?: doc.createdAt ?: Timestamp(0, 0) }
+
+        val byDomainId = LinkedHashMap<Long, HistoryTrade>()
+        for ((doc, rawBuy) in pairs) {
+            val domain = doc.toDomain(explicitIsBuy = rawBuy)
+            byDomainId[domain.id] = domain
+        }
+
+        return byDomainId.values.sortedWith(
+            compareBy<HistoryTrade> {
+                SriLankaMarketHours.parseMt5DateTimeMillis(it.closeTime)
+            }.thenBy { it.id }
+        )
+    }
+
     fun observeOpenPositions(
         userId: String = requireUserId(),
         accountKey: String = "main"
@@ -283,14 +404,7 @@ class CloudTradeRepository(
                     return@addSnapshotListener
                 }
                 if (snapshot != null) {
-                    val items = snapshot.toObjects(
-                        TradePositionDoc::class.java,
-                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    ).filter { isDocForAccount(it.id, "pos", safeKey) }
-                        .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
-                        .map { it.toDomain() }
-                        .distinctBy { it.id }
-                    trySend(items)
+                    trySend(mapPositionDocuments(snapshot.documents, safeKey))
                 }
             }
         awaitClose { registration.remove() }
@@ -311,25 +425,7 @@ class CloudTradeRepository(
                     return@addSnapshotListener
                 }
                 if (snapshot != null) {
-                    val docs = snapshot.toObjects(
-                        HistoryTradeDoc::class.java,
-                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    ).filter { isDocForAccount(it.id, "hist", safeKey) }
-                        .sortedBy { it.updatedAt ?: it.createdAt ?: Timestamp(0, 0) }
-
-                    // Deduplicate by domain trade ID, keeping the most recently updated document
-                    val byDomainId = LinkedHashMap<Long, HistoryTrade>()
-                    for (doc in docs) {
-                        val domain = doc.toDomain()
-                        byDomainId[domain.id] = domain
-                    }
-
-                    val items = byDomainId.values.sortedWith(
-                        compareBy<HistoryTrade> {
-                            SriLankaMarketHours.parseMt5DateTimeMillis(it.closeTime)
-                        }.thenBy { it.id }
-                    )
-                    trySend(items)
+                    trySend(mapHistoryDocuments(snapshot.documents, safeKey))
                 }
             }
         awaitClose { registration.remove() }
@@ -346,13 +442,7 @@ class CloudTradeRepository(
                 .whereEqualTo("userId", userId)
                 .get()
                 .await()
-            snap.toObjects(
-                TradePositionDoc::class.java,
-                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-            ).filter { isDocForAccount(it.id, "pos", safeKey) }
-                .sortedByDescending { it.createdAt ?: Timestamp(0, 0) }
-                .map { it.toDomain() }
-                .distinctBy { it.id }
+            mapPositionDocuments(snap.documents, safeKey)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -372,22 +462,7 @@ class CloudTradeRepository(
                 .whereEqualTo("userId", userId)
                 .get()
                 .await()
-            val docs = snap.toObjects(
-                HistoryTradeDoc::class.java,
-                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-            ).filter { isDocForAccount(it.id, "hist", safeKey) }
-                .sortedBy { it.updatedAt ?: it.createdAt ?: Timestamp(0, 0) }
-
-            val byDomainId = LinkedHashMap<Long, HistoryTrade>()
-            for (doc in docs) {
-                val domain = doc.toDomain()
-                byDomainId[domain.id] = domain
-            }
-            byDomainId.values.sortedWith(
-                compareBy<HistoryTrade> {
-                    SriLankaMarketHours.parseMt5DateTimeMillis(it.closeTime)
-                }.thenBy { it.id }
-            )
+            mapHistoryDocuments(snap.documents, safeKey)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -472,6 +547,15 @@ class CloudTradeRepository(
         val docRef = db.collection("users").document(userId).collection("positions").document(docId)
         val safeOpenPrice = position.openPrice.safeFinite(1.0).coerceAtLeast(0.00001)
         val safeCurrentPrice = position.currentPrice.safeFinite(safeOpenPrice).coerceAtLeast(0.00001)
+        val safeProfit = position.profit.safeFinite(0.0)
+        val accurateBuy = resolveAccurateTradeIsBuy(
+            storedIsBuy = position.isBuy,
+            openPrice = safeOpenPrice,
+            closePrice = safeCurrentPrice,
+            profit = safeProfit,
+            sl = position.sl,
+            tp = position.tp
+        )
 
         try {
             val existing = docRef.get().await()
@@ -484,11 +568,11 @@ class CloudTradeRepository(
                 "userId" to userId,
                 "ticketId" to position.id.coerceAtLeast(1L),
                 "symbol" to position.symbol.ifBlank { "EURUSD" }.take(32),
-                "isBuy" to position.isBuy,
+                "isBuy" to accurateBuy,
                 "lots" to position.lots.safeFinite(0.01).coerceIn(0.01, 1000.0),
                 "openPrice" to safeOpenPrice,
                 "currentPrice" to safeCurrentPrice,
-                "profit" to position.profit.safeFinite(0.0),
+                "profit" to safeProfit,
                 "openTime" to position.openTime.ifBlank { SriLankaMarketHours.formatDateTime() }.take(64),
                 "createdAt" to createdAtValue,
                 "updatedAt" to FieldValue.serverTimestamp()
@@ -564,6 +648,7 @@ class CloudTradeRepository(
         val safeOpenPrice: Double
         val safeClosePrice: Double
         val safeProfit: Double
+        val accurateBuy: Boolean
 
         if (trade.isWithdrawal) {
             val cleanComment = trade.comment.ifBlank { "Withdrawal" }.replace("|", " ").take(24)
@@ -573,8 +658,21 @@ class CloudTradeRepository(
             safeOpenPrice = 1.0
             safeClosePrice = 1.0
             safeProfit = -abs(trade.profit.safeFinite(0.0))
+            accurateBuy = false
         } else {
-            encodedSymbol = trade.symbol.ifBlank { "EURUSD" }.take(32)
+            safeLots = trade.lots.safeFinite(0.01).coerceIn(0.01, 1000.0)
+            safeOpenPrice = trade.openPrice.safeFinite(1.0).coerceAtLeast(0.00001)
+            safeClosePrice = trade.closePrice.safeFinite(1.0).coerceAtLeast(0.00001)
+            safeProfit = trade.profit.safeFinite(0.0)
+            accurateBuy = resolveAccurateTradeIsBuy(
+                storedIsBuy = trade.isBuy,
+                openPrice = safeOpenPrice,
+                closePrice = safeClosePrice,
+                profit = safeProfit,
+                sl = trade.sl,
+                tp = trade.tp
+            )
+            encodedSymbol = trade.symbol.ifBlank { "XAUUSD" }.take(32)
             val baseOpen = trade.openTime.ifBlank { safeCloseTime }.take(24)
             val slStr = formatCompactDouble(trade.sl)
             val tpStr = formatCompactDouble(trade.tp)
@@ -585,24 +683,23 @@ class CloudTradeRepository(
                 TradeHitOutcome.NONE -> "NO"
                 null -> ""
             }
+            val sideCode = if (accurateBuy) "BUY" else "SELL"
+            val candidateWithSide = "$baseOpen|$slStr|$tpStr|$ticketStr|$hitCode|$sideCode"
             val candidateWithHit = "$baseOpen|$slStr|$tpStr|$ticketStr|$hitCode"
             val candidateOpen = "$baseOpen|$slStr|$tpStr|$ticketStr"
             encodedOpenTime = when {
+                candidateWithSide.length <= 160 -> candidateWithSide
                 hitCode.isNotEmpty() && candidateWithHit.length <= 160 -> candidateWithHit
                 candidateOpen.length <= 160 -> candidateOpen
                 else -> baseOpen.take(64)
             }
-            safeLots = trade.lots.safeFinite(0.01).coerceIn(0.01, 1000.0)
-            safeOpenPrice = trade.openPrice.safeFinite(1.0).coerceAtLeast(0.00001)
-            safeClosePrice = trade.closePrice.safeFinite(1.0).coerceAtLeast(0.00001)
-            safeProfit = trade.profit.safeFinite(0.0)
         }
 
         return mapOf(
             "userId" to userId,
             "ticketId" to safeTicketId,
             "symbol" to encodedSymbol,
-            "isBuy" to trade.isBuy,
+            "isBuy" to accurateBuy,
             "lots" to safeLots,
             "openPrice" to safeOpenPrice,
             "closePrice" to safeClosePrice,

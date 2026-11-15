@@ -42,13 +42,17 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.SriLankaMarketHours
+import com.example.data.resolveAccurateTradeIsBuy
 import com.example.model.TradeHitOutcome
 import com.example.ui.components.MT5HamburgerButton
 import com.example.ui.theme.MT5RobotoCondensedFontFamily
@@ -122,6 +126,7 @@ private data class DisplayHistoryItem(
     val digits: Int,
     val stripe: LeftStripeType,
     val isWithdrawal: Boolean = false,
+    val isDeposit: Boolean = false,
     val comment: String = ""
 )
 
@@ -160,14 +165,55 @@ fun HistoryScreen(
     val customStartDateMs = if (rawCustomStartMs > 0L) rawCustomStartMs else todayStartMs
     val customEndDateMs = if (rawCustomEndMs > 0L) rawCustomEndMs else todayStartMs
 
-    // Map all repository history items (including seeded NAS100 trades, user trades, and withdrawals)
-    val allItems = remember(userHistory, quotes) {
+    // Map all repository history items (including 1st Base Deposit, closed trades, and withdrawals)
+    val allItems = remember(userHistory, quotes, account.deposit, account.depositDate, account.accountId) {
         val quoteDigitsMap = quotes.associate { it.symbol to it.digits }
-        userHistory.map { trade ->
-            val displaySym = if (trade.symbol.equals("NDX100", ignoreCase = true)) "NAS100" else trade.symbol
+        val baseDepositItem = if (account.deposit > 0.0 && account.depositDate.isNotBlank()) {
+            val depTime = account.depositDate.trim()
+            val accNum = account.accountId.filter { it.isDigit() }.take(6).toLongOrNull() ?: 101L
+            DisplayHistoryItem(
+                id = -1000L,
+                ticketId = "#${384900000L + accNum}",
+                symbol = "Balance",
+                isBuy = true,
+                lots = 0.01,
+                openPrice = 1.0,
+                closePrice = 1.0,
+                openTime = depTime,
+                closeTime = depTime,
+                sl = null,
+                tp = null,
+                swap = 0.0,
+                commission = 0.0,
+                profit = kotlin.math.round(account.deposit * 100.0) / 100.0,
+                digits = 2,
+                stripe = LeftStripeType.NONE,
+                isWithdrawal = false,
+                isDeposit = true,
+                comment = "Deposit"
+            )
+        } else {
+            null
+        }
+
+        val mappedTrades = userHistory.map { trade ->
+            val rawSym = trade.symbol.trim().ifBlank { "XAUUSD" }
+            val displaySym = if (rawSym.equals("NDX100", ignoreCase = true)) "NAS100" else rawSym
             val digits = quoteDigitsMap[displaySym]
                 ?: if (displaySym.contains("XAU") || displaySym.contains("BTC") || displaySym.contains("NAS") || displaySym.contains("NDX")) 2 else 5
-            val resolvedHitOutcome = viewModel.resolveTradeHitOutcome(trade)
+            val accurateBuy = if (trade.isWithdrawal) {
+                false
+            } else {
+                resolveAccurateTradeIsBuy(
+                    storedIsBuy = trade.isBuy,
+                    openPrice = trade.openPrice,
+                    closePrice = trade.closePrice,
+                    profit = trade.profit,
+                    sl = trade.sl,
+                    tp = trade.tp
+                )
+            }
+            val resolvedHitOutcome = viewModel.resolveTradeHitOutcome(trade.copy(isBuy = accurateBuy))
             val stripeType = when {
                 trade.isWithdrawal -> LeftStripeType.NONE
                 resolvedHitOutcome == TradeHitOutcome.TP_HIT -> LeftStripeType.GREEN
@@ -178,7 +224,7 @@ fun HistoryScreen(
                 id = trade.id,
                 ticketId = trade.ticketId.ifBlank { "#${385000000L + trade.id}" },
                 symbol = displaySym,
-                isBuy = trade.isBuy,
+                isBuy = accurateBuy,
                 lots = trade.lots,
                 openPrice = trade.openPrice,
                 closePrice = trade.closePrice,
@@ -192,9 +238,11 @@ fun HistoryScreen(
                 digits = digits,
                 stripe = stripeType,
                 isWithdrawal = trade.isWithdrawal,
+                isDeposit = false,
                 comment = trade.comment
             )
         }
+        listOfNotNull(baseDepositItem) + mappedTrades
     }
 
     val displayedItems = remember(selectedPeriod, customStartDateMs, customEndDateMs, allItems, sortAscending) {
@@ -218,33 +266,19 @@ fun HistoryScreen(
     }
 
     val totalProfit = remember(displayedItems) {
-        kotlin.math.round(displayedItems.filter { !it.isWithdrawal }.sumOf { it.profit } * 100.0) / 100.0
+        kotlin.math.round(displayedItems.filter { !it.isWithdrawal && !it.isDeposit }.sumOf { it.profit } * 100.0) / 100.0
     }
     val totalSwap = remember(displayedItems) {
-        kotlin.math.round(displayedItems.filter { !it.isWithdrawal }.sumOf { it.swap } * 100.0) / 100.0
+        kotlin.math.round(displayedItems.filter { !it.isWithdrawal && !it.isDeposit }.sumOf { it.swap } * 100.0) / 100.0
     }
     val totalCommission = remember(displayedItems) {
-        kotlin.math.round(displayedItems.filter { !it.isWithdrawal }.sumOf { it.commission } * 100.0) / 100.0
+        kotlin.math.round(displayedItems.filter { !it.isWithdrawal && !it.isDeposit }.sumOf { it.commission } * 100.0) / 100.0
     }
     val totalWithdrawal = remember(displayedItems) {
         kotlin.math.round(displayedItems.filter { it.isWithdrawal }.sumOf { abs(it.profit) } * 100.0) / 100.0
     }
-    val depositAmount = remember(selectedPeriod, customStartDateMs, customEndDateMs, account.deposit, account.depositDate) {
-        val nowMs = System.currentTimeMillis()
-        val isDepositInPeriod = account.deposit > 0.0 &&
-            account.depositDate.isNotBlank() &&
-            SriLankaMarketHours.isWithinHistoryPeriod(
-                dateStr = account.depositDate,
-                periodName = selectedPeriod.name,
-                nowMs = nowMs,
-                customStartMs = customStartDateMs,
-                customEndMs = customEndDateMs
-            )
-        if (isDepositInPeriod) {
-            kotlin.math.round(account.deposit * 100.0) / 100.0
-        } else {
-            0.00
-        }
+    val depositAmount = remember(displayedItems) {
+        kotlin.math.round(displayedItems.filter { it.isDeposit }.sumOf { abs(it.profit) } * 100.0) / 100.0
     }
     val calculatedBalance = kotlin.math.round((depositAmount + totalProfit + totalSwap + totalCommission - totalWithdrawal) * 100.0) / 100.0
 
@@ -1437,7 +1471,15 @@ private fun MT5HistoryPositionRow(
                 .weight(1f)
                 .padding(start = 10.dp, end = 14.dp, top = 6.dp, bottom = 6.dp)
         ) {
-            if (item.isWithdrawal) {
+            if (item.isWithdrawal || item.isDeposit) {
+                val defaultComment = if (item.isDeposit) "Deposit" else "Withdrawal"
+                val amountText = if (item.isDeposit) {
+                    String.format(Locale.US, "%.2f", abs(item.profit))
+                } else {
+                    String.format(Locale.US, "-%.2f", abs(item.profit))
+                }
+                val amountColor = if (item.isDeposit) Color(0xFF0D62C6) else Color(0xFFB71C1C)
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1449,8 +1491,7 @@ private fun MT5HistoryPositionRow(
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF111111),
-                        lineHeight = 19.sp,
-                        modifier = Modifier.alignByBaseline()
+                        lineHeight = 19.sp
                     )
                     Text(
                         text = item.closeTime,
@@ -1458,8 +1499,7 @@ private fun MT5HistoryPositionRow(
                         fontSize = 13.5.sp,
                         fontWeight = FontWeight.Normal,
                         color = Color(0xFF6E7378),
-                        lineHeight = 16.sp,
-                        modifier = Modifier.alignByBaseline()
+                        lineHeight = 16.sp
                     )
                 }
 
@@ -1471,22 +1511,20 @@ private fun MT5HistoryPositionRow(
                     verticalAlignment = Alignment.Bottom
                 ) {
                     Text(
-                        text = item.comment.ifBlank { "Withdrawal" },
+                        text = item.comment.ifBlank { defaultComment },
                         fontFamily = MT5RobotoCondensedFontFamily,
                         fontSize = 15.5.sp,
                         fontWeight = FontWeight.Normal,
                         color = Color(0xFF6E7378),
-                        lineHeight = 18.sp,
-                        modifier = Modifier.alignByBaseline()
+                        lineHeight = 18.sp
                     )
                     Text(
-                        text = String.format(Locale.US, "-%.2f", abs(item.profit)),
+                        text = amountText,
                         fontFamily = MT5RobotoFontFamily,
                         fontSize = 14.5.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color(0xFFB71C1C),
-                        lineHeight = 17.sp,
-                        modifier = Modifier.alignByBaseline()
+                        color = amountColor,
+                        lineHeight = 17.sp
                     )
                 }
 
@@ -1503,7 +1541,7 @@ private fun MT5HistoryPositionRow(
                             color = Color(0xFF70757A)
                         )
                         Text(
-                            text = "Deal: ${item.comment.ifBlank { "Withdrawal" }}",
+                            text = "Deal: ${item.comment.ifBlank { defaultComment }}",
                             fontFamily = MT5RobotoCondensedFontFamily,
                             fontSize = 13.sp,
                             color = Color(0xFF70757A)
@@ -1511,36 +1549,51 @@ private fun MT5HistoryPositionRow(
                     }
                 }
             } else {
-                // Line 1: Left = [NDX100, sell 0.01] (Roboto Condensed Bold 17sp) | Right = [2026.09.30 16:55:07] (Roboto Condensed Regular 13.5sp)
+                // Line 1: Left = [XAUUSD, sell 0.01] (Roboto Condensed Bold 17sp) | Right = [2026.09.30 16:55:07] (Roboto Condensed Regular 13.5sp)
+                val cleanSymbol = item.symbol.trim().ifBlank { "XAUUSD" }
+                val resolvedIsBuy = resolveAccurateTradeIsBuy(
+                    storedIsBuy = item.isBuy,
+                    openPrice = item.openPrice,
+                    closePrice = item.closePrice,
+                    profit = item.profit,
+                    sl = item.sl,
+                    tp = item.tp
+                )
+                val typeColor = if (resolvedIsBuy) Color(0xFF0D62C6) else Color(0xFFB71C1C)
+                val sideLabel = if (resolvedIsBuy) "buy" else "sell"
+                val lotsLabel = String.format(Locale.US, "%.2f", item.lots)
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.Bottom
                 ) {
-                    Row(
-                        modifier = Modifier.alignByBaseline(),
-                        verticalAlignment = Alignment.Bottom
-                    ) {
-                        Text(
-                            text = "${item.symbol}, ",
-                            fontFamily = MT5RobotoCondensedFontFamily,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF111111),
-                            lineHeight = 19.sp,
-                            modifier = Modifier.alignByBaseline()
-                        )
-                        val typeColor = if (item.isBuy) Color(0xFF0D62C6) else Color(0xFFB71C1C)
-                        Text(
-                            text = "${if (item.isBuy) "buy" else "sell"} ${String.format(Locale.US, "%.2f", item.lots)}",
-                            fontFamily = MT5RobotoCondensedFontFamily,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = typeColor,
-                            lineHeight = 19.sp,
-                            modifier = Modifier.alignByBaseline()
-                        )
-                    }
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(
+                                SpanStyle(
+                                    fontFamily = MT5RobotoCondensedFontFamily,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF111111)
+                                )
+                            ) {
+                                append("$cleanSymbol, ")
+                            }
+                            withStyle(
+                                SpanStyle(
+                                    fontFamily = MT5RobotoCondensedFontFamily,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = typeColor
+                                )
+                            ) {
+                                append("$sideLabel $lotsLabel")
+                            }
+                        },
+                        lineHeight = 19.sp,
+                        maxLines = 1
+                    )
 
                     Text(
                         text = item.closeTime,
@@ -1548,8 +1601,7 @@ private fun MT5HistoryPositionRow(
                         fontSize = 13.5.sp,
                         fontWeight = FontWeight.Normal,
                         color = Color(0xFF6E7378),
-                        lineHeight = 16.sp,
-                        modifier = Modifier.alignByBaseline()
+                        lineHeight = 16.sp
                     )
                 }
 
