@@ -73,9 +73,12 @@ fun TradeScreen(
     modifier: Modifier = Modifier
 ) {
     val account by viewModel.account.collectAsState()
+    val accounts by viewModel.accounts.collectAsState()
+    val isCloudSynced by viewModel.isCloudSynced.collectAsState()
     val positions by viewModel.positions.collectAsState()
     val quotes by viewModel.quotes.collectAsState()
     val digitsMap = remember(quotes) { quotes.associate { it.symbol to it.digits } }
+    val hasActiveAccount = isCloudSynced && accounts.isNotEmpty()
 
     Column(
         modifier = modifier
@@ -99,7 +102,7 @@ fun TradeScreen(
                     onClick = { viewModel.openDrawer() }
                 )
                 Spacer(modifier = Modifier.width(18.dp))
-                if (positions.isEmpty()) {
+                if (!hasActiveAccount || positions.isEmpty()) {
                     Text(
                         text = "Trade",
                         fontSize = 19.sp,
@@ -132,97 +135,57 @@ fun TradeScreen(
                 }
             }
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(20.dp)
-            ) {
-                if (positions.isEmpty()) {
-                    // Summary Card Icon (opens TopUp / Demo Balance dialog when empty)
+            if (hasActiveAccount) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    if (positions.isEmpty()) {
+                        // Summary Card Icon (opens TopUp / Demo Balance dialog when empty)
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) { viewModel.openTopUpDialog() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            MT5SummaryCardIcon(color = Color(0xFF3C4043))
+                        }
+                    }
+
+                    // Sort Down/Up Arrows Icon (↓↑)
                     Box(
                         modifier = Modifier
                             .size(32.dp)
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
-                            ) { viewModel.openTopUpDialog() },
+                            ) { /* Sort positions */ },
                         contentAlignment = Alignment.Center
                     ) {
-                        MT5SummaryCardIcon(color = Color(0xFF3C4043))
+                        MT5SortArrowsIcon(color = Color(0xFF3C4043))
+                    }
+
+                    // New Order Page+ Icon (opens New Order dialog)
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { viewModel.openNewOrderDialog() }
+                            .testTag("add_trade_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        MT5NewOrderDocIcon(color = Color(0xFF3C4043))
                     }
                 }
-
-                // Sort Down/Up Arrows Icon (↓↑)
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { /* Sort positions */ },
-                    contentAlignment = Alignment.Center
-                ) {
-                    MT5SortArrowsIcon(color = Color(0xFF3C4043))
-                }
-
-                // New Order Page+ Icon (opens New Order dialog)
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { viewModel.openNewOrderDialog() }
-                        .testTag("add_trade_button"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    MT5NewOrderDocIcon(color = Color(0xFF3C4043))
-                }
             }
         }
 
-        // Account Summary Metrics with Dotted Leaders & Space-Separated Thousands
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Color.White)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) { viewModel.openTopUpDialog() }
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-        ) {
-            DottedMetricRow(
-                label = "Balance:",
-                value = formatMt5SpaceNumber(account.balance, 2)
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            DottedMetricRow(
-                label = "Equity:",
-                value = formatMt5SpaceNumber(account.equity, 2)
-            )
-            if (positions.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(6.dp))
-                DottedMetricRow(
-                    label = "Margin:",
-                    value = formatMt5SpaceNumber(account.margin, 2)
-                )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            DottedMetricRow(
-                label = "Free margin:",
-                value = formatMt5SpaceNumber(account.freeMargin, 2)
-            )
-            if (positions.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(6.dp))
-                DottedMetricRow(
-                    label = "Margin Level (%):",
-                    value = formatMt5SpaceNumber(account.marginLevel, 2)
-                )
-            }
-        }
-
-        // Open Positions Section
-        if (positions.isEmpty()) {
+        if (!hasActiveAccount) {
             HorizontalDivider(thickness = 0.8.dp, color = Color(0xFFE5E7EB))
             Box(
                 modifier = Modifier
@@ -230,6 +193,56 @@ fun TradeScreen(
                     .background(Color.White)
             )
         } else {
+            // Account Summary Metrics with Dotted Leaders & Space-Separated Thousands
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { viewModel.openTopUpDialog() }
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                DottedMetricRow(
+                    label = "Balance:",
+                    value = formatMt5SpaceNumber(account.balance, 2)
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                DottedMetricRow(
+                    label = "Equity:",
+                    value = formatMt5SpaceNumber(account.equity, 2)
+                )
+                if (positions.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    DottedMetricRow(
+                        label = "Margin:",
+                        value = formatMt5SpaceNumber(account.margin, 2)
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                DottedMetricRow(
+                    label = "Free margin:",
+                    value = formatMt5SpaceNumber(account.freeMargin, 2)
+                )
+                if (positions.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    DottedMetricRow(
+                        label = "Margin Level (%):",
+                        value = formatMt5SpaceNumber(account.marginLevel, 2)
+                    )
+                }
+            }
+
+            // Open Positions Section
+            if (positions.isEmpty()) {
+                HorizontalDivider(thickness = 0.8.dp, color = Color(0xFFE5E7EB))
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.White)
+                )
+            } else {
             // "Positions" Section Header matching Screenshots 1 & 2
             HorizontalDivider(thickness = 0.7.dp, color = Color(0xFFE0E3E7))
             Row(
@@ -277,6 +290,7 @@ fun TradeScreen(
                         color = MT5Separator
                     )
                 }
+            }
             }
         }
     }

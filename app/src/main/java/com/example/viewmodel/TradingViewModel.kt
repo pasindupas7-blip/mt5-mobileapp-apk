@@ -212,6 +212,10 @@ class TradingViewModel @JvmOverloads constructor(
     }
 
     fun toggleQuickTradeBar() {
+        if (!isCloudSynced.value) {
+            showNotification("Please sign in with Google first to trade")
+            return
+        }
         _showQuickTradeBar.value = !_showQuickTradeBar.value
     }
 
@@ -286,7 +290,7 @@ class TradingViewModel @JvmOverloads constructor(
     fun signOutCloud(context: Context) {
         viewModelScope.launch {
             GoogleAuthHelper.signOut(context)
-            showNotification("Signed out of Cloud Server (Local Storage Active)")
+            showNotification("Signed out of Google Account")
         }
     }
 
@@ -397,15 +401,24 @@ class TradingViewModel @JvmOverloads constructor(
     }
 
     fun openNewOrderDialog(symbol: String? = null) {
+        if (!isCloudSynced.value || accounts.value.isEmpty()) {
+            showNotification("Please sign in with Google first to trade")
+            return
+        }
         val sym = symbol ?: _selectedSymbol.value
         _activeDialog.value = ActiveDialog.NewOrder(sym)
     }
 
     fun openClosePositionDialog(position: TradePosition) {
+        if (!isCloudSynced.value) return
         _activeDialog.value = ActiveDialog.ClosePosition(position)
     }
 
     fun openTopUpDialog() {
+        if (!isCloudSynced.value || accounts.value.isEmpty()) {
+            showNotification("Please sign in with Google first")
+            return
+        }
         _activeDialog.value = ActiveDialog.TopUp(account.value.balance)
     }
 
@@ -414,6 +427,10 @@ class TradingViewModel @JvmOverloads constructor(
     }
 
     fun executeQuickTrade(isBuy: Boolean, lot: Double) {
+        if (!isCloudSynced.value || accounts.value.isEmpty()) {
+            showNotification("Please sign in with Google first to trade")
+            return
+        }
         val symbol = _selectedSymbol.value
         val quote = quotes.value.find { it.symbol == symbol } ?: return
         repository.executeOrder(symbol, isBuy, lot)
@@ -422,6 +439,11 @@ class TradingViewModel @JvmOverloads constructor(
     }
 
     fun executeDialogOrder(symbol: String, isBuy: Boolean, lots: Double, sl: Double?, tp: Double?) {
+        if (!isCloudSynced.value || accounts.value.isEmpty()) {
+            dismissDialog()
+            showNotification("Please sign in with Google first to trade")
+            return
+        }
         val quote = quotes.value.find { it.symbol == symbol } ?: return
         repository.executeOrder(symbol, isBuy, lots, sl, tp)
         val priceStr = String.format(Locale.US, "%.${quote.digits}f", if (isBuy) quote.ask else quote.bid)
@@ -540,6 +562,10 @@ class TradingViewModel @JvmOverloads constructor(
         tp: Double? = null,
         customTicketId: String? = null
     ) {
+        if (!isCloudSynced.value) {
+            showNotification("Please sign in with Google first")
+            return
+        }
         val saved = repository.saveOrUpdateRunningPosition(
             existingId = existingId,
             symbol = symbol,
@@ -556,6 +582,7 @@ class TradingViewModel @JvmOverloads constructor(
     }
 
     fun deleteRunningPosition(id: Long) {
+        if (!isCloudSynced.value) return
         repository.deleteRunningPosition(id)
         showNotification("Running trade removed & synced to Cloud")
     }
@@ -577,6 +604,10 @@ class TradingViewModel @JvmOverloads constructor(
         customCommission: Double? = null,
         customSwap: Double? = null
     ) {
+        if (!isCloudSynced.value) {
+            showNotification("Please sign in with Google first")
+            return
+        }
         val saved = repository.saveOrUpdateHistoryTrade(
             existingId = existingId,
             symbol = symbol,
@@ -604,6 +635,10 @@ class TradingViewModel @JvmOverloads constructor(
         comment: String = "Withdrawal",
         customTicketId: String? = null
     ) {
+        if (!isCloudSynced.value) {
+            showNotification("Please sign in with Google first")
+            return
+        }
         val saved = repository.saveOrUpdateWithdrawal(
             existingId = existingId,
             amount = amount,
@@ -615,11 +650,16 @@ class TradingViewModel @JvmOverloads constructor(
     }
 
     fun deleteHistoryItem(id: Long) {
+        if (!isCloudSynced.value) return
         repository.deleteHistoryItem(id)
         showNotification("History record removed & synced to Cloud")
     }
 
     fun setDepositAmount(newDeposit: Double, newDepositDate: String? = null) {
+        if (!isCloudSynced.value) {
+            showNotification("Please sign in with Google first")
+            return
+        }
         repository.setDepositAmount(newDeposit, newDepositDate)
         showNotification("Deposit updated to $${String.format(Locale.US, "%.2f", newDeposit)} USD")
     }
@@ -633,6 +673,10 @@ class TradingViewModel @JvmOverloads constructor(
         newBalance: Double? = null,
         logoType: String? = null
     ) {
+        if (!isCloudSynced.value) {
+            showNotification("Please sign in with Google first")
+            return
+        }
         val current = repository.account.value
         repository.updateAccountDetails(
             accountName = accountName,
@@ -656,6 +700,10 @@ class TradingViewModel @JvmOverloads constructor(
         logoType: String = "AUTO",
         switchToNew: Boolean = true
     ) {
+        if (!isCloudSynced.value) {
+            showNotification("Please sign in with Google first")
+            return
+        }
         val created = repository.addAccount(
             accountName = accountName,
             brokerName = brokerName,

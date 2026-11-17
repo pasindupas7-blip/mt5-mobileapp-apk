@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -87,8 +88,11 @@ fun AccountsScreen(
         viewModel.closeAccountsPage()
     }
 
+    val context = LocalContext.current
     val account by viewModel.account.collectAsState()
     val accounts by viewModel.accounts.collectAsState()
+    val isCloudSynced by viewModel.isCloudSynced.collectAsState()
+    val hasLoadedAccounts = isCloudSynced && accounts.isNotEmpty()
 
     var showMenu by remember { mutableStateOf(false) }
     var showAddAccountDialog by remember { mutableStateOf(false) }
@@ -424,14 +428,20 @@ fun AccountsScreen(
                     MT5CertificateIcon(color = Color(0xFF494D52))
                 }
 
-                // 2. Plus (+) Icon -> Opens Add New Account Dialog
+                // 2. Plus (+) Icon -> Opens Add New Account Dialog when signed in, or prompts Google Sign-In
                 Box(
                     modifier = Modifier
                         .size(32.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
-                        ) { showAddAccountDialog = true }
+                        ) {
+                            if (isCloudSynced) {
+                                showAddAccountDialog = true
+                            } else {
+                                viewModel.signInWithGoogle(context)
+                            }
+                        }
                         .testTag("accounts_add_button"),
                     contentAlignment = Alignment.Center
                 ) {
@@ -480,38 +490,50 @@ fun AccountsScreen(
                         onDismissRequest = { showMenu = false },
                         modifier = Modifier.background(Color.White)
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("Add new account (+)", color = Color(0xFF1C1C1E)) },
-                            onClick = {
-                                showMenu = false
-                                showAddAccountDialog = true
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Edit active account", color = Color(0xFF1C1C1E)) },
-                            onClick = {
-                                showMenu = false
-                                editingAccount = account
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Delete account", color = MT5Red) },
-                            onClick = {
-                                showMenu = false
-                                if (accounts.size <= 1) {
-                                    confirmDeleteAccount = account
-                                } else {
-                                    showManageDeleteListDialog = true
+                        if (!isCloudSynced) {
+                            DropdownMenuItem(
+                                text = { Text("Sign in with Google", color = MT5Blue, fontWeight = FontWeight.Bold) },
+                                onClick = {
+                                    showMenu = false
+                                    viewModel.signInWithGoogle(context)
                                 }
+                            )
+                        } else {
+                            DropdownMenuItem(
+                                text = { Text("Add new account (+)", color = Color(0xFF1C1C1E)) },
+                                onClick = {
+                                    showMenu = false
+                                    showAddAccountDialog = true
+                                }
+                            )
+                            if (hasLoadedAccounts) {
+                                DropdownMenuItem(
+                                    text = { Text("Edit active account", color = Color(0xFF1C1C1E)) },
+                                    onClick = {
+                                        showMenu = false
+                                        editingAccount = account
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete account", color = MT5Red) },
+                                    onClick = {
+                                        showMenu = false
+                                        if (accounts.size <= 1) {
+                                            confirmDeleteAccount = account
+                                        } else {
+                                            showManageDeleteListDialog = true
+                                        }
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Deposit / Manage funds", color = Color(0xFF1C1C1E)) },
+                                    onClick = {
+                                        showMenu = false
+                                        viewModel.openTopUpDialog()
+                                    }
+                                )
                             }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Deposit / Manage funds", color = Color(0xFF1C1C1E)) },
-                            onClick = {
-                                showMenu = false
-                                viewModel.openTopUpDialog()
-                            }
-                        )
+                        }
                         DropdownMenuItem(
                             text = { Text("User guide", color = Color(0xFF1C1C1E)) },
                             onClick = {
@@ -533,41 +555,94 @@ fun AccountsScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Scrollable Accounts Column: Active Account Card at top + Other Accounts List below
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            // 1. Top Active Account Summary Card
-            ActiveAccountHeroCard(
-                account = account,
-                onCardClick = { viewModel.closeAccountsPage() },
-                onCardLongClick = { actionDialogAccount = account },
-                onInfoClick = { actionDialogAccount = account }
-            )
-
-            // 2. Secondary Account Cards List (all other accounts)
-            val otherAccounts = accounts.filter { it.key != account.key }
-            otherAccounts.forEach { secondaryAcc ->
-                SecondaryAccountCard(
-                    account = secondaryAcc,
-                    onClick = {
-                        viewModel.switchAccount(secondaryAcc.key)
-                    },
-                    onLongClick = {
-                        actionDialogAccount = secondaryAcc
-                    },
-                    onInfoClick = {
-                        actionDialogAccount = secondaryAcc
+        if (!hasLoadedAccounts) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = 20.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFFF6F7F9),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp, vertical = 28.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "No Trading Accounts",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MT5TextPrimary
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Connect your Google Account to load your trading accounts, positions, and trade history.",
+                            fontSize = 13.5.sp,
+                            color = MT5TextSecondary,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(18.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MT5Blue,
+                            modifier = Modifier
+                                .clickable { viewModel.signInWithGoogle(context) }
+                                .testTag("accounts_google_sign_in_button")
+                        ) {
+                            Text(
+                                text = "Sign in with Google",
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White,
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+                            )
+                        }
                     }
-                )
+                }
             }
+        } else {
+            // Scrollable Accounts Column: Active Account Card at top + Other Accounts List below
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                // 1. Top Active Account Summary Card
+                ActiveAccountHeroCard(
+                    account = account,
+                    onCardClick = { viewModel.closeAccountsPage() },
+                    onCardLongClick = { actionDialogAccount = account },
+                    onInfoClick = { actionDialogAccount = account }
+                )
 
-            Spacer(modifier = Modifier.height(16.dp))
+                // 2. Secondary Account Cards List (all other accounts)
+                val otherAccounts = accounts.filter { it.key != account.key }
+                otherAccounts.forEach { secondaryAcc ->
+                    SecondaryAccountCard(
+                        account = secondaryAcc,
+                        onClick = {
+                            viewModel.switchAccount(secondaryAcc.key)
+                        },
+                        onLongClick = {
+                            actionDialogAccount = secondaryAcc
+                        },
+                        onInfoClick = {
+                            actionDialogAccount = secondaryAcc
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
         }
     }
 }

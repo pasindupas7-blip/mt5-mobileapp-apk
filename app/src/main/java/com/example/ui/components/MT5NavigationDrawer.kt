@@ -187,12 +187,14 @@ fun MT5NavigationDrawerOverlay(
 
                     Spacer(modifier = Modifier.width(18.dp))
 
-                    val drawerDisplayName = if (account.accountName.startsWith("Pasindu Jeewantha Pelan")) {
-                        "Pasindu Jeewantha Pelan..."
-                    } else {
-                        account.accountName
+                    val hasConnectedAccount = account.accountName.isNotBlank()
+                    val drawerDisplayName = when {
+                        !hasConnectedAccount -> "No account connected"
+                        account.accountName.startsWith("Pasindu Jeewantha Pelan") -> "Pasindu Jeewantha Pelan..."
+                        else -> account.accountName
                     }
                     val drawerDisplayId = when {
+                        !hasConnectedAccount -> "Connect Google to load accounts"
                         account.accountId.startsWith("36054607") -> "36054607 - MonetaMarkets..."
                         account.accountId.startsWith("1066312") -> "1066312 - MonetaMarkets-..."
                         else -> account.accountId.replace("\u2014", "-")

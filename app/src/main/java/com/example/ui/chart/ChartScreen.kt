@@ -95,6 +95,7 @@ fun ChartScreen(
     val chartHistoryMoveEnabled by viewModel.chartHistoryMoveEnabled.collectAsState()
     val showChartGrid by viewModel.showChartGrid.collectAsState()
     val showSymbolDescription by viewModel.showSymbolDescription.collectAsState()
+    val isCloudSynced by viewModel.isCloudSynced.collectAsState()
 
     val symbolPositions = remember(positions, selectedQuote?.symbol) {
         val activeSym = selectedQuote?.symbol
@@ -337,8 +338,8 @@ fun ChartScreen(
             color = topDividerColor
         )
 
-        // Top One-Click Trading Bar (SELL / 0.01 / BUY) — positioned right below the toolbar matching Screenshot 3
-        if (showQuickTradeBar && selectedQuote != null) {
+        // Top One-Click Trading Bar (SELL / 0.01 / BUY) — only shown when signed in with Google
+        if (showQuickTradeBar && isCloudSynced && selectedQuote != null) {
             QuickTradeBar(
                 quote = selectedQuote!!,
                 currentLot = quickTradeLot,
@@ -578,13 +579,15 @@ fun ChartScreen(
                             },
                             modifier = Modifier.testTag("chart_more_symbol_desc_toggle")
                         )
-                        DropdownMenuItem(
-                            text = { Text("New Order (with SL / TP)") },
-                            onClick = {
-                                showMoreMenu = false
-                                viewModel.openNewOrderDialog(q.symbol)
-                            }
-                        )
+                        if (isCloudSynced) {
+                            DropdownMenuItem(
+                                text = { Text("New Order (with SL / TP)") },
+                                onClick = {
+                                    showMoreMenu = false
+                                    viewModel.openNewOrderDialog(q.symbol)
+                                }
+                            )
+                        }
                         symbolPositions.forEach { pos ->
                             DropdownMenuItem(
                                 text = {
