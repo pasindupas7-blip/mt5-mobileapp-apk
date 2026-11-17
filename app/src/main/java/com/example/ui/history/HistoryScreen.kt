@@ -501,7 +501,8 @@ fun HistoryScreen(
                     }
 
                     // Closed Position & Withdrawal Rows (tapping toggles expanded details; tapping again collapses)
-                    items(displayedItems, key = { "${it.id}_${it.closeTime}" }) { item ->
+                    val uniqueDisplayedItems = displayedItems.distinctBy { "${it.id}_${it.closeTime}" }
+                    items(uniqueDisplayedItems, key = { "${it.id}_${it.closeTime}" }) { item ->
                         val isExpanded = item.id in expandedTradeIds
                         MT5HistoryPositionRow(
                             item = item,

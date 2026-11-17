@@ -8,7 +8,6 @@ import com.example.model.TradeHitOutcome
 import com.example.model.TradePosition
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -16,6 +15,8 @@ import com.google.firebase.firestore.IgnoreExtraProperties
 import com.google.firebase.firestore.PropertyName
 import com.google.firebase.firestore.ServerTimestamp
 import java.math.BigDecimal
+import java.util.Date
+import java.util.Locale
 import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.awaitClose
@@ -33,6 +34,102 @@ private fun formatCompactDouble(value: Double?): String {
     } catch (e: Exception) {
         value.toString()
     }
+}
+
+private fun Any?.toSafeDouble(default: Double = 0.0): Double {
+    val raw = when (this) {
+        is Number -> this.toDouble()
+        is String -> this.trim().replace(" ", "").replace(",", "").toDoubleOrNull() ?: default
+        else -> default
+    }
+    return raw.safeFinite(default)
+}
+
+private fun Any?.toSafeNullablePositiveDouble(): Double? {
+    if (this == null) return null
+    val v = this.toSafeDouble(0.0)
+    return if (v > 0.0) v else null
+}
+
+private fun Any?.toSafeLong(default: Long = 0L): Long {
+    return when (this) {
+        is Number -> this.toLong()
+        is String -> {
+            val cleaned = this.trim().removePrefix("#").trim()
+            cleaned.toLongOrNull()
+                ?: cleaned.toDoubleOrNull()?.toLong()
+                ?: cleaned.filter { it.isDigit() }.takeLast(12).toLongOrNull()
+                ?: default
+        }
+        else -> default
+    }
+}
+
+private fun Any?.toSafeBoolean(): Boolean? {
+    return when (this) {
+        is Boolean -> this
+        is Number -> this.toInt() != 0
+        is String -> when (this.trim().uppercase(Locale.US)) {
+            "TRUE", "1", "BUY", "B", "LONG", "REAL", "LIVE", "YES" -> true
+            "FALSE", "0", "SELL", "S", "SHORT", "DEMO", "NO" -> false
+            else -> null
+        }
+        else -> null
+    }
+}
+
+private fun Any?.toSafeTimestamp(): Timestamp? {
+    return try {
+        when (this) {
+            is Timestamp -> this
+            is Date -> Timestamp(this)
+            is Number -> {
+                val n = this.toLong()
+                if (n > 10_000_000_000L) {
+                    Timestamp(Date(n))
+                } else if (n > 0L) {
+                    Timestamp(n, 0)
+                } else {
+                    null
+                }
+            }
+            else -> null
+        }
+    } catch (t: Throwable) {
+        null
+    }
+}
+
+private fun Any?.toSafeDateTimeString(): String {
+    return try {
+        when (this) {
+            is String -> this.trim()
+            is Timestamp -> SriLankaMarketHours.formatDateTime(this.toDate().time)
+            is Date -> SriLankaMarketHours.formatDateTime(this.time)
+            is Number -> {
+                val n = this.toLong()
+                val ms = if (n in 1..9_999_999_999L) n * 1000L else n
+                if (ms > 0L) SriLankaMarketHours.formatDateTime(ms) else ""
+            }
+            else -> ""
+        }
+    } catch (t: Throwable) {
+        ""
+    }
+}
+
+private fun resolveUniqueDocDomainId(docId: String, rawTicketId: Any?, fallbackBase: Long): Long {
+    val fromTicket = rawTicketId.toSafeLong(0L)
+    if (fromTicket > 0L) return fromTicket
+
+    val afterUnderscore = docId.substringAfterLast("_").toLongOrNull()
+    if (afterUnderscore != null && afterUnderscore > 0L) return afterUnderscore
+
+    val digitsTail = docId.filter { it.isDigit() }.takeLast(12).toLongOrNull()
+    if (digitsTail != null && digitsTail > 0L) return digitsTail
+
+    val positiveHash = (docId.hashCode().toLong() and 0x7FFFFFFFL)
+    return if (positiveHash > 0L) fallbackBase + positiveHash else fallbackBase
 }
 
 /**
@@ -74,20 +171,20 @@ fun resolveAccurateTradeIsBuy(
         return validSl < safeOpen
     }
     // 3. Fallback to explicit side metadata or stored boolean when profit is 0.0 and no SL/TP is set:
-    when (explicitSideCode?.trim()?.uppercase()) {
-        "SELL", "S", "0", "FALSE" -> return false
-        "BUY", "B", "1", "TRUE" -> return true
+    when (explicitSideCode?.trim()?.uppercase(Locale.US)) {
+        "SELL", "S", "0", "FALSE", "SHORT" -> return false
+        "BUY", "B", "1", "TRUE", "LONG" -> return true
     }
     return storedIsBuy
 }
 
 @IgnoreExtraProperties
 data class TradePositionDoc(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val ticketId: Long = 0L,
     val symbol: String = "",
-    @get:PropertyName("isBuy") val isBuy: Boolean = true,
+    @get:PropertyName("isBuy") @set:PropertyName("isBuy") var isBuy: Boolean = true,
     val lots: Double = 0.0,
     val openPrice: Double = 0.0,
     val currentPrice: Double = 0.0,
@@ -98,11 +195,8 @@ data class TradePositionDoc(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
-    fun toDomain(explicitIsBuy: Boolean? = null): TradePosition {
-        val fallbackId = id.substringAfterLast("_").toLongOrNull()
-            ?: id.filter { it.isDigit() }.takeLast(12).toLongOrNull()
-            ?: 1001L
-        val resolvedId = if (ticketId > 0L) ticketId else fallbackId
+    fun toDomain(explicitIsBuy: Boolean? = null, explicitSideCode: String? = null): TradePosition {
+        val resolvedId = resolveUniqueDocDomainId(id, ticketId, 100_000L)
         val safeOpen = openPrice.safeFinite(1.0).coerceAtLeast(0.00001)
         val safeCurrent = currentPrice.safeFinite(safeOpen).coerceAtLeast(0.00001)
         val safeSl = sl?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }
@@ -114,7 +208,8 @@ data class TradePositionDoc(
             closePrice = safeCurrent,
             profit = safeProfit,
             sl = safeSl,
-            tp = safeTp
+            tp = safeTp,
+            explicitSideCode = explicitSideCode
         )
         return TradePosition(
             id = resolvedId,
@@ -133,11 +228,11 @@ data class TradePositionDoc(
 
 @IgnoreExtraProperties
 data class HistoryTradeDoc(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val ticketId: Long = 0L,
     val symbol: String = "",
-    @get:PropertyName("isBuy") val isBuy: Boolean = true,
+    @get:PropertyName("isBuy") @set:PropertyName("isBuy") var isBuy: Boolean = true,
     val lots: Double = 0.0,
     val openPrice: Double = 0.0,
     val closePrice: Double = 0.0,
@@ -149,22 +244,33 @@ data class HistoryTradeDoc(
     @ServerTimestamp val createdAt: Timestamp? = null,
     @ServerTimestamp val updatedAt: Timestamp? = null
 ) {
-    fun toDomain(explicitIsBuy: Boolean? = null): HistoryTrade {
-        val fallbackId = id.substringAfterLast("_").toLongOrNull()
-            ?: id.filter { it.isDigit() }.takeLast(12).toLongOrNull()
-            ?: 2001L
-        val domainId = if (ticketId > 0L) ticketId else fallbackId
-        val isWdr = symbol.startsWith("WDR:") || symbol.equals("WITHDRAWAL", ignoreCase = true)
+    fun toDomain(
+        explicitIsBuy: Boolean? = null,
+        explicitSl: Double? = null,
+        explicitTp: Double? = null,
+        explicitTicketStr: String? = null,
+        explicitHitCode: String? = null,
+        explicitSideCode: String? = null,
+        explicitIsWithdrawal: Boolean? = null,
+        explicitComment: String? = null
+    ): HistoryTrade {
+        val domainId = resolveUniqueDocDomainId(id, ticketId, 200_000L)
+        val isWdr = explicitIsWithdrawal == true ||
+            symbol.startsWith("WDR:") ||
+            symbol.equals("WITHDRAWAL", ignoreCase = true) ||
+            symbol.equals("Balance", ignoreCase = true) && profit < 0.0
 
         if (isWdr) {
-            val wdrComment = if (symbol.startsWith("WDR:")) {
-                symbol.removePrefix("WDR:").ifBlank { "Withdrawal" }
-            } else {
-                "Withdrawal"
+            val wdrComment = when {
+                !explicitComment.isNullOrBlank() -> explicitComment
+                symbol.startsWith("WDR:") -> symbol.removePrefix("WDR:").ifBlank { "Withdrawal" }
+                else -> "Withdrawal"
             }
             val openParts = openTime.split("|")
             val parsedOpenTime = openParts.firstOrNull()?.ifBlank { closeTime } ?: closeTime
-            val parsedTicket = openParts.getOrNull(1)?.takeIf { it.isNotBlank() } ?: "#${385000000L + domainId}"
+            val parsedTicket = openParts.getOrNull(1)?.takeIf { it.isNotBlank() }
+                ?: explicitTicketStr?.takeIf { it.isNotBlank() }
+                ?: "#${if (domainId >= 100000000L) domainId else 385000000L + domainId}"
             return HistoryTrade(
                 id = domainId,
                 symbol = "Balance",
@@ -190,16 +296,24 @@ data class HistoryTradeDoc(
         val parts = openTime.split("|")
         val cleanOpenTime = parts.firstOrNull()?.ifBlank { closeTime } ?: closeTime
         val parsedSl = parts.getOrNull(1)?.toDoubleOrNull()?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }
+            ?: explicitSl
         val parsedTp = parts.getOrNull(2)?.toDoubleOrNull()?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }
-        val parsedTicket = parts.getOrNull(3)?.takeIf { it.isNotBlank() }
-            ?: "#${if (domainId >= 100000000L) domainId else 385000000L + domainId}"
-        val parsedHitOutcome = when (parts.getOrNull(4)?.trim()?.uppercase()) {
+            ?: explicitTp
+        val rawTicketPart = parts.getOrNull(3)?.takeIf { it.isNotBlank() }
+            ?: explicitTicketStr?.takeIf { it.isNotBlank() }
+        val parsedTicket = if (rawTicketPart != null) {
+            if (rawTicketPart.startsWith("#")) rawTicketPart else "#$rawTicketPart"
+        } else {
+            "#${if (domainId >= 100000000L) domainId else 385000000L + domainId}"
+        }
+        val rawHitCode = parts.getOrNull(4)?.trim()?.takeIf { it.isNotBlank() } ?: explicitHitCode
+        val parsedHitOutcome = when (rawHitCode?.trim()?.uppercase(Locale.US)) {
             "TP", "TP_HIT" -> TradeHitOutcome.TP_HIT
             "SL", "SL_HIT" -> TradeHitOutcome.SL_HIT
             "NO", "NONE" -> TradeHitOutcome.NONE
             else -> null
         }
-        val parsedSideCode = parts.getOrNull(5)?.trim()?.takeIf { it.isNotBlank() }
+        val parsedSideCode = parts.getOrNull(5)?.trim()?.takeIf { it.isNotBlank() } ?: explicitSideCode
         val safeOpenPrice = openPrice.safeFinite(1.0).coerceAtLeast(0.00001)
         val safeClosePrice = closePrice.safeFinite(1.0).coerceAtLeast(0.00001)
         val safeProfit = profit.safeFinite(0.0)
@@ -229,7 +343,7 @@ data class HistoryTradeDoc(
             tp = parsedTp,
             ticketId = parsedTicket,
             isWithdrawal = false,
-            comment = "",
+            comment = explicitComment ?: "",
             hitOutcome = parsedHitOutcome
         )
     }
@@ -237,7 +351,7 @@ data class HistoryTradeDoc(
 
 @IgnoreExtraProperties
 data class AccountDoc(
-    @DocumentId val id: String = "",
+    val id: String = "",
     val userId: String = "",
     val balance: Double = 524.74,
     val deposit: Double = 500.00,
@@ -248,9 +362,11 @@ data class AccountDoc(
     val brokerName: String = "Moneta Markets (Pty) Ltd",
     val accountId: String = "36054607 - MonetaMarkets-Live",
     val serverName: String = "AS08, Hedge",
-    @get:PropertyName("isReal") val isReal: Boolean = true,
+    @get:PropertyName("isReal") @set:PropertyName("isReal") var isReal: Boolean = true,
     @ServerTimestamp val createdAt: Timestamp? = null,
-    @ServerTimestamp val updatedAt: Timestamp? = null
+    @ServerTimestamp val updatedAt: Timestamp? = null,
+    val explicitDepositDate: String? = null,
+    val explicitLogoType: String? = null
 ) {
     fun toDomain(
         equity: Double = balance,
@@ -261,8 +377,12 @@ data class AccountDoc(
     ): AccountInfo {
         val serverParts = serverName.split("|")
         val cleanServer = serverParts.firstOrNull()?.ifBlank { "AS08, Hedge" } ?: "AS08, Hedge"
-        val parsedDepositDate = serverParts.getOrNull(1)?.takeIf { it.isNotBlank() } ?: "2026.07.15 09:00:00"
-        val parsedLogoType = serverParts.getOrNull(2)?.takeIf { it.isNotBlank() } ?: "AUTO"
+        val parsedDepositDate = serverParts.getOrNull(1)?.takeIf { it.isNotBlank() }
+            ?: explicitDepositDate?.takeIf { it.isNotBlank() }
+            ?: "2026.07.15 09:00:00"
+        val parsedLogoType = serverParts.getOrNull(2)?.takeIf { it.isNotBlank() }
+            ?: explicitLogoType?.takeIf { it.isNotBlank() }
+            ?: "AUTO"
 
         return AccountInfo(
             balance = balance.safeFinite(524.74),
@@ -304,10 +424,15 @@ class CloudTradeRepository(
 
     /**
      * Checks whether [docId] (with [prefix] = "pos" or "hist") belongs to [accountKey].
-     * Correctly handles both "main" (`pos_1001`) and 3-part secondary account keys (`pos_acc_1762620000000_456_1001`).
+     * Correctly handles both "main" (`pos_1001` or iOS unprefixed IDs) and 3-part secondary account keys (`pos_acc_1762620000000_456_1001`).
      */
-    fun isDocForAccount(docId: String, prefix: String, accountKey: String): Boolean {
+    fun isDocForAccount(docId: String, prefix: String, accountKey: String, data: Map<String, Any?>? = null): Boolean {
         val safeKey = accountKey.ifBlank { "main" }
+        val explicitAccountKey = (data?.get("accountKey") as? String)?.trim()?.takeIf { it.isNotEmpty() }
+            ?: (data?.get("key") as? String)?.trim()?.takeIf { it.isNotEmpty() }
+        if (explicitAccountKey != null) {
+            return explicitAccountKey == safeKey
+        }
         val body = docId.removePrefix("${prefix}_")
         return if (safeKey == "main") {
             !body.startsWith("acc_")
@@ -341,52 +466,225 @@ class CloudTradeRepository(
         return if (docSuffix.isNotBlank()) "${base}_$docSuffix" else base
     }
 
+    /**
+     * Crash-proof manual parser for open positions that works identically for Android and iOS Firestore documents.
+     * Avoids `DocumentSnapshot.toObject()` so documents containing an `"id"` field or differing iOS types never throw RuntimeException.
+     */
+    private fun parsePositionSnapshot(snap: DocumentSnapshot): Pair<TradePositionDoc, TradePosition>? {
+        return try {
+            if (!snap.exists()) return null
+            val data = snap.data ?: return null
+            val docId = snap.id
+            val rawTicket = data["ticketId"] ?: data["ticket"] ?: data["id"]
+            val ticketLong = resolveUniqueDocDomainId(docId, rawTicket, 100_000L)
+            val rawSymbol = (data["symbol"] ?: data["pair"] ?: data["instrument"])?.toString()?.trim().orEmpty()
+            val rawSideStr = (data["side"] ?: data["type"] ?: data["orderType"] ?: data["direction"] ?: data["action"])?.toString()
+            val rawBuyBool = data["isBuy"].toSafeBoolean()
+                ?: data["buy"].toSafeBoolean()
+                ?: rawSideStr.toSafeBoolean()
+            val lots = (data["lots"] ?: data["volume"] ?: data["lotSize"]).toSafeDouble(0.01).coerceAtLeast(0.01)
+            val openPrice = (data["openPrice"] ?: data["entryPrice"] ?: data["price"]).toSafeDouble(1.0).coerceAtLeast(0.00001)
+            val currentPrice = (data["currentPrice"] ?: data["closePrice"] ?: data["marketPrice"]).toSafeDouble(openPrice).coerceAtLeast(0.00001)
+            val sl = (data["sl"] ?: data["stopLoss"]).toSafeNullablePositiveDouble()
+            val tp = (data["tp"] ?: data["takeProfit"]).toSafeNullablePositiveDouble()
+            val profit = (data["profit"] ?: data["pnl"] ?: data["floatingPnL"]).toSafeDouble(0.0)
+            val openTime = (data["openTime"] ?: data["entryTime"] ?: data["time"]).toSafeDateTimeString()
+            val createdAt = data["createdAt"].toSafeTimestamp()
+            val updatedAt = data["updatedAt"].toSafeTimestamp()
+
+            val doc = TradePositionDoc(
+                id = docId,
+                userId = (data["userId"] as? String).orEmpty(),
+                ticketId = ticketLong,
+                symbol = rawSymbol,
+                isBuy = rawBuyBool ?: true,
+                lots = lots,
+                openPrice = openPrice,
+                currentPrice = currentPrice,
+                sl = sl,
+                tp = tp,
+                profit = profit,
+                openTime = openTime,
+                createdAt = createdAt,
+                updatedAt = updatedAt
+            )
+            val domain = doc.toDomain(
+                explicitIsBuy = rawBuyBool,
+                explicitSideCode = rawSideStr
+            )
+            Pair(doc, domain)
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Crash-proof manual parser for historical trades that works identically for Android and iOS Firestore documents.
+     * Avoids `DocumentSnapshot.toObject()` so documents containing an `"id"` field or differing iOS types never throw RuntimeException.
+     */
+    private fun parseHistorySnapshot(snap: DocumentSnapshot): Pair<HistoryTradeDoc, HistoryTrade>? {
+        return try {
+            if (!snap.exists()) return null
+            val data = snap.data ?: return null
+            val docId = snap.id
+            val rawTicket = data["ticketId"] ?: data["ticket"] ?: data["orderId"] ?: data["id"]
+            val ticketLong = resolveUniqueDocDomainId(docId, rawTicket, 200_000L)
+            val explicitTicketStr = when (rawTicket) {
+                is String -> rawTicket.trim().takeIf { it.isNotEmpty() && (it.startsWith("#") || it.all { ch -> ch.isDigit() }) }
+                is Number -> "#${rawTicket.toLong()}"
+                else -> null
+            }
+            val rawSymbol = (data["symbol"] ?: data["pair"] ?: data["instrument"])?.toString()?.trim().orEmpty()
+            val rawSideStr = (data["side"] ?: data["type"] ?: data["orderType"] ?: data["direction"] ?: data["action"])?.toString()
+            val rawBuyBool = data["isBuy"].toSafeBoolean()
+                ?: data["buy"].toSafeBoolean()
+                ?: rawSideStr.toSafeBoolean()
+            val lots = (data["lots"] ?: data["volume"] ?: data["lotSize"]).toSafeDouble(0.01).coerceAtLeast(0.01)
+            val openPrice = (data["openPrice"] ?: data["entryPrice"]).toSafeDouble(1.0).coerceAtLeast(0.00001)
+            val closePrice = (data["closePrice"] ?: data["exitPrice"] ?: data["currentPrice"]).toSafeDouble(openPrice).coerceAtLeast(0.00001)
+            val profit = (data["profit"] ?: data["pnl"] ?: data["realizedProfit"]).toSafeDouble(0.0)
+            val openTime = (data["openTime"] ?: data["entryTime"]).toSafeDateTimeString()
+            val closeTime = (data["closeTime"] ?: data["exitTime"] ?: data["time"]).toSafeDateTimeString()
+                .ifBlank { openTime.substringBefore("|") }
+            val commission = (data["commission"] ?: data["comm"]).toSafeDouble(0.0)
+            val swap = (data["swap"] ?: data["rollover"]).toSafeDouble(0.0)
+            val explicitSl = (data["sl"] ?: data["stopLoss"]).toSafeNullablePositiveDouble()
+            val explicitTp = (data["tp"] ?: data["takeProfit"]).toSafeNullablePositiveDouble()
+            val explicitHitCode = (data["hitOutcome"] ?: data["hit"] ?: data["closeReason"])?.toString()
+            val explicitIsWithdrawal = (data["isWithdrawal"] ?: data["withdrawal"]).toSafeBoolean()
+                ?: (rawSideStr?.trim()?.equals("WITHDRAWAL", ignoreCase = true) == true)
+            val explicitComment = (data["comment"] ?: data["note"] ?: data["description"])?.toString()?.trim()
+            val createdAt = data["createdAt"].toSafeTimestamp()
+            val updatedAt = data["updatedAt"].toSafeTimestamp()
+
+            val doc = HistoryTradeDoc(
+                id = docId,
+                userId = (data["userId"] as? String).orEmpty(),
+                ticketId = ticketLong,
+                symbol = rawSymbol,
+                isBuy = rawBuyBool ?: true,
+                lots = lots,
+                openPrice = openPrice,
+                closePrice = closePrice,
+                profit = profit,
+                openTime = openTime,
+                closeTime = closeTime,
+                commission = commission,
+                swap = swap,
+                createdAt = createdAt,
+                updatedAt = updatedAt
+            )
+            val domain = doc.toDomain(
+                explicitIsBuy = rawBuyBool,
+                explicitSl = explicitSl,
+                explicitTp = explicitTp,
+                explicitTicketStr = explicitTicketStr,
+                explicitHitCode = explicitHitCode,
+                explicitSideCode = rawSideStr,
+                explicitIsWithdrawal = explicitIsWithdrawal,
+                explicitComment = explicitComment
+            )
+            Pair(doc, domain)
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
+    /**
+     * Crash-proof manual parser for account documents that works identically for Android and iOS Firestore documents.
+     */
+    private fun parseAccountSnapshot(snap: DocumentSnapshot): AccountDoc? {
+        return try {
+            if (!snap.exists()) return null
+            val data = snap.data ?: return null
+            val docId = (data["key"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: snap.id.ifBlank { "main" }
+            val balance = (data["balance"]).toSafeDouble(524.74)
+            val deposit = (data["deposit"] ?: data["initialDeposit"] ?: data["baseDeposit"]).toSafeDouble(500.00)
+            val realizedProfit = (data["realizedProfit"] ?: data["profit"]).toSafeDouble(24.74)
+            val totalSwap = (data["totalSwap"] ?: data["swap"]).toSafeDouble(0.0)
+            val totalCommission = (data["totalCommission"] ?: data["commission"]).toSafeDouble(0.0)
+            val accountName = (data["accountName"] ?: data["name"])?.toString()?.trim()
+                ?.takeIf { it.isNotEmpty() } ?: "Pasindu Jeewantha Pelanage"
+            val brokerName = (data["brokerName"] ?: data["broker"] ?: data["company"])?.toString()?.trim()
+                ?.takeIf { it.isNotEmpty() } ?: "Moneta Markets (Pty) Ltd"
+            val accountId = (data["accountId"] ?: data["login"] ?: data["accountNumber"])?.toString()?.trim()
+                ?.takeIf { it.isNotEmpty() } ?: "36054607 - MonetaMarkets-Live"
+            val serverName = (data["serverName"] ?: data["server"])?.toString()?.trim()
+                ?.takeIf { it.isNotEmpty() } ?: "AS08, Hedge"
+            val isReal = data["isReal"].toSafeBoolean()
+                ?: data["real"].toSafeBoolean()
+                ?: (data["accountType"]?.toString()?.equals("Demo", ignoreCase = true)?.not())
+                ?: true
+            val explicitDepositDate = (data["depositDate"] ?: data["initialDepositDate"]).toSafeDateTimeString()
+                .takeIf { it.isNotEmpty() }
+            val explicitLogoType = (data["logoType"] ?: data["brokerLogo"] ?: data["logo"])?.toString()?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            val createdAt = data["createdAt"].toSafeTimestamp()
+            val updatedAt = data["updatedAt"].toSafeTimestamp()
+
+            AccountDoc(
+                id = docId,
+                userId = (data["userId"] as? String).orEmpty(),
+                balance = balance,
+                deposit = deposit,
+                realizedProfit = realizedProfit,
+                totalSwap = totalSwap,
+                totalCommission = totalCommission,
+                accountName = accountName,
+                brokerName = brokerName,
+                accountId = accountId,
+                serverName = serverName,
+                isReal = isReal,
+                createdAt = createdAt,
+                updatedAt = updatedAt,
+                explicitDepositDate = explicitDepositDate,
+                explicitLogoType = explicitLogoType
+            )
+        } catch (t: Throwable) {
+            null
+        }
+    }
+
     private fun mapPositionDocuments(
         documents: List<DocumentSnapshot>,
         safeKey: String
     ): List<TradePosition> {
-        return documents
-            .filter { isDocForAccount(it.id, "pos", safeKey) }
-            .mapNotNull { snap ->
-                val doc = snap.toObject(
-                    TradePositionDoc::class.java,
-                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                ) ?: return@mapNotNull null
-                val rawBuy = snap.getBoolean("isBuy") ?: snap.getBoolean("buy")
-                Pair(doc, rawBuy)
-            }
-            .sortedByDescending { (doc, _) -> doc.createdAt ?: Timestamp(0, 0) }
-            .map { (doc, rawBuy) -> doc.toDomain(explicitIsBuy = rawBuy) }
-            .distinctBy { it.id }
+        return try {
+            documents
+                .filter { isDocForAccount(it.id, "pos", safeKey, it.data) }
+                .mapNotNull { snap -> parsePositionSnapshot(snap) }
+                .sortedByDescending { (doc, _) -> doc.createdAt ?: Timestamp(0, 0) }
+                .map { (_, domain) -> domain }
+                .distinctBy { it.id }
+        } catch (t: Throwable) {
+            emptyList()
+        }
     }
 
     private fun mapHistoryDocuments(
         documents: List<DocumentSnapshot>,
         safeKey: String
     ): List<HistoryTrade> {
-        val pairs = documents
-            .filter { isDocForAccount(it.id, "hist", safeKey) }
-            .mapNotNull { snap ->
-                val doc = snap.toObject(
-                    HistoryTradeDoc::class.java,
-                    DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                ) ?: return@mapNotNull null
-                val rawBuy = snap.getBoolean("isBuy") ?: snap.getBoolean("buy")
-                Pair(doc, rawBuy)
+        return try {
+            val pairs = documents
+                .filter { isDocForAccount(it.id, "hist", safeKey, it.data) }
+                .mapNotNull { snap -> parseHistorySnapshot(snap) }
+                .sortedBy { (doc, _) -> doc.updatedAt ?: doc.createdAt ?: Timestamp(0, 0) }
+
+            val byDomainId = LinkedHashMap<Long, HistoryTrade>()
+            for ((_, domain) in pairs) {
+                byDomainId[domain.id] = domain
             }
-            .sortedBy { (doc, _) -> doc.updatedAt ?: doc.createdAt ?: Timestamp(0, 0) }
 
-        val byDomainId = LinkedHashMap<Long, HistoryTrade>()
-        for ((doc, rawBuy) in pairs) {
-            val domain = doc.toDomain(explicitIsBuy = rawBuy)
-            byDomainId[domain.id] = domain
+            byDomainId.values.sortedWith(
+                compareBy<HistoryTrade> {
+                    SriLankaMarketHours.parseMt5DateTimeMillis(it.closeTime)
+                }.thenBy { it.id }
+            )
+        } catch (t: Throwable) {
+            emptyList()
         }
-
-        return byDomainId.values.sortedWith(
-            compareBy<HistoryTrade> {
-                SriLankaMarketHours.parseMt5DateTimeMillis(it.closeTime)
-            }.thenBy { it.id }
-        )
     }
 
     fun observeOpenPositions(
@@ -395,19 +693,29 @@ class CloudTradeRepository(
     ): Flow<List<TradePosition>> = callbackFlow {
         val safeKey = accountKey.ifBlank { "main" }
         val path = "users/$userId/positions"
-        val registration = db.collection("users").document(userId).collection("positions")
-            .whereEqualTo("userId", userId)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    handleFirestoreError(error, OperationType.LIST, path)
-                    close(error)
-                    return@addSnapshotListener
+        val registration = try {
+            db.collection("users").document(userId).collection("positions")
+                .whereEqualTo("userId", userId)
+                .addSnapshotListener { snapshot, error ->
+                    try {
+                        if (error != null) {
+                            runCatching { handleFirestoreError(error, OperationType.LIST, path) }
+                            runCatching { close(error) }
+                            return@addSnapshotListener
+                        }
+                        if (snapshot != null) {
+                            trySend(mapPositionDocuments(snapshot.documents, safeKey))
+                        }
+                    } catch (ignored: Throwable) {
+                    }
                 }
-                if (snapshot != null) {
-                    trySend(mapPositionDocuments(snapshot.documents, safeKey))
-                }
-            }
-        awaitClose { registration.remove() }
+        } catch (t: Throwable) {
+            runCatching { close(t) }
+            null
+        }
+        awaitClose {
+            runCatching { registration?.remove() }
+        }
     }
 
     fun observeTradeHistory(
@@ -416,19 +724,29 @@ class CloudTradeRepository(
     ): Flow<List<HistoryTrade>> = callbackFlow {
         val safeKey = accountKey.ifBlank { "main" }
         val path = "users/$userId/history"
-        val registration = db.collection("users").document(userId).collection("history")
-            .whereEqualTo("userId", userId)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    handleFirestoreError(error, OperationType.LIST, path)
-                    close(error)
-                    return@addSnapshotListener
+        val registration = try {
+            db.collection("users").document(userId).collection("history")
+                .whereEqualTo("userId", userId)
+                .addSnapshotListener { snapshot, error ->
+                    try {
+                        if (error != null) {
+                            runCatching { handleFirestoreError(error, OperationType.LIST, path) }
+                            runCatching { close(error) }
+                            return@addSnapshotListener
+                        }
+                        if (snapshot != null) {
+                            trySend(mapHistoryDocuments(snapshot.documents, safeKey))
+                        }
+                    } catch (ignored: Throwable) {
+                    }
                 }
-                if (snapshot != null) {
-                    trySend(mapHistoryDocuments(snapshot.documents, safeKey))
-                }
-            }
-        awaitClose { registration.remove() }
+        } catch (t: Throwable) {
+            runCatching { close(t) }
+            null
+        }
+        awaitClose {
+            runCatching { registration?.remove() }
+        }
     }
 
     suspend fun fetchOpenPositionsOnce(
@@ -438,16 +756,25 @@ class CloudTradeRepository(
         val safeKey = accountKey.ifBlank { "main" }
         val path = "users/$userId/positions"
         return try {
-            val snap = db.collection("users").document(userId).collection("positions")
-                .whereEqualTo("userId", userId)
-                .get()
-                .await()
-            mapPositionDocuments(snap.documents, safeKey)
+            val col = db.collection("users").document(userId).collection("positions")
+            val snap = try {
+                col.whereEqualTo("userId", userId).get().await()
+            } catch (e: Exception) {
+                col.get().await()
+            }
+            val docs = if (snap.documents.isNotEmpty()) {
+                snap.documents
+            } else {
+                runCatching { col.get().await().documents }.getOrDefault(emptyList())
+            }
+            mapPositionDocuments(docs, safeKey)
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.LIST, path)
-            throw e
+        } catch (t: Throwable) {
+            if (t is Exception) {
+                runCatching { handleFirestoreError(t, OperationType.LIST, path) }
+            }
+            emptyList()
         }
     }
 
@@ -458,35 +785,50 @@ class CloudTradeRepository(
         val safeKey = accountKey.ifBlank { "main" }
         val path = "users/$userId/history"
         return try {
-            val snap = db.collection("users").document(userId).collection("history")
-                .whereEqualTo("userId", userId)
-                .get()
-                .await()
-            mapHistoryDocuments(snap.documents, safeKey)
+            val col = db.collection("users").document(userId).collection("history")
+            val snap = try {
+                col.whereEqualTo("userId", userId).get().await()
+            } catch (e: Exception) {
+                col.get().await()
+            }
+            val docs = if (snap.documents.isNotEmpty()) {
+                snap.documents
+            } else {
+                runCatching { col.get().await().documents }.getOrDefault(emptyList())
+            }
+            mapHistoryDocuments(docs, safeKey)
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.LIST, path)
-            throw e
+        } catch (t: Throwable) {
+            if (t is Exception) {
+                runCatching { handleFirestoreError(t, OperationType.LIST, path) }
+            }
+            emptyList()
         }
     }
 
     suspend fun fetchAllAccountsOnce(userId: String = requireUserId()): List<AccountDoc> {
         val path = "users/$userId/accounts"
         return try {
-            val snap = db.collection("users").document(userId).collection("accounts")
-                .whereEqualTo("userId", userId)
-                .get()
-                .await()
-            snap.toObjects(
-                AccountDoc::class.java,
-                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-            )
+            val col = db.collection("users").document(userId).collection("accounts")
+            val snap = try {
+                col.whereEqualTo("userId", userId).get().await()
+            } catch (e: Exception) {
+                col.get().await()
+            }
+            val docs = if (snap.documents.isNotEmpty()) {
+                snap.documents
+            } else {
+                runCatching { col.get().await().documents }.getOrDefault(emptyList())
+            }
+            docs.mapNotNull { parseAccountSnapshot(it) }
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.LIST, path)
-            throw e
+        } catch (t: Throwable) {
+            if (t is Exception) {
+                runCatching { handleFirestoreError(t, OperationType.LIST, path) }
+            }
+            emptyList()
         }
     }
 
@@ -496,46 +838,58 @@ class CloudTradeRepository(
     ): Flow<AccountDoc?> = callbackFlow {
         val safeKey = accountKey.ifBlank { "main" }
         val path = "users/$userId/accounts/$safeKey"
-        val registration = db.collection("users").document(userId).collection("accounts").document(safeKey)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    handleFirestoreError(error, OperationType.GET, path)
-                    close(error)
-                    return@addSnapshotListener
+        val registration = try {
+            db.collection("users").document(userId).collection("accounts").document(safeKey)
+                .addSnapshotListener { snapshot, error ->
+                    try {
+                        if (error != null) {
+                            runCatching { handleFirestoreError(error, OperationType.GET, path) }
+                            runCatching { close(error) }
+                            return@addSnapshotListener
+                        }
+                        if (snapshot != null && snapshot.exists()) {
+                            trySend(parseAccountSnapshot(snapshot))
+                        } else {
+                            trySend(null)
+                        }
+                    } catch (ignored: Throwable) {
+                    }
                 }
-                if (snapshot != null && snapshot.exists()) {
-                    trySend(
-                        snapshot.toObject(
-                            AccountDoc::class.java,
-                            DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                        )
-                    )
-                } else {
-                    trySend(null)
-                }
-            }
-        awaitClose { registration.remove() }
+        } catch (t: Throwable) {
+            runCatching { close(t) }
+            null
+        }
+        awaitClose {
+            runCatching { registration?.remove() }
+        }
     }
 
     fun observeAllAccountDocs(userId: String = requireUserId()): Flow<List<AccountDoc>> = callbackFlow {
         val path = "users/$userId/accounts"
-        val registration = db.collection("users").document(userId).collection("accounts")
-            .whereEqualTo("userId", userId)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    handleFirestoreError(error, OperationType.LIST, path)
-                    close(error)
-                    return@addSnapshotListener
+        val registration = try {
+            db.collection("users").document(userId).collection("accounts")
+                .whereEqualTo("userId", userId)
+                .addSnapshotListener { snapshot, error ->
+                    try {
+                        if (error != null) {
+                            runCatching { handleFirestoreError(error, OperationType.LIST, path) }
+                            runCatching { close(error) }
+                            return@addSnapshotListener
+                        }
+                        if (snapshot != null) {
+                            val docs = snapshot.documents.mapNotNull { parseAccountSnapshot(it) }
+                            trySend(docs)
+                        }
+                    } catch (ignored: Throwable) {
+                    }
                 }
-                if (snapshot != null) {
-                    val docs = snapshot.toObjects(
-                        AccountDoc::class.java,
-                        DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-                    )
-                    trySend(docs)
-                }
-            }
-        awaitClose { registration.remove() }
+        } catch (t: Throwable) {
+            runCatching { close(t) }
+            null
+        }
+        awaitClose {
+            runCatching { registration?.remove() }
+        }
     }
 
     suspend fun saveOpenPosition(
@@ -558,9 +912,9 @@ class CloudTradeRepository(
         )
 
         try {
-            val existing = docRef.get().await()
-            val createdAtValue: Any = if (existing.exists()) {
-                existing.getTimestamp("createdAt") ?: FieldValue.serverTimestamp()
+            val existing = runCatching { docRef.get().await() }.getOrNull()
+            val createdAtValue: Any = if (existing != null && existing.exists()) {
+                existing.data?.get("createdAt").toSafeTimestamp() ?: FieldValue.serverTimestamp()
             } else {
                 FieldValue.serverTimestamp()
             }
@@ -586,8 +940,8 @@ class CloudTradeRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, docRef.path)
-            throw e
+            runCatching { handleFirestoreError(e, OperationType.WRITE, docRef.path) }
+            return docId
         }
     }
 
@@ -612,8 +966,7 @@ class CloudTradeRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.UPDATE, docRef.path)
-            throw e
+            runCatching { handleFirestoreError(e, OperationType.UPDATE, docRef.path) }
         }
     }
 
@@ -629,8 +982,7 @@ class CloudTradeRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.DELETE, docRef.path)
-            throw e
+            runCatching { handleFirestoreError(e, OperationType.DELETE, docRef.path) }
         }
     }
 
@@ -722,9 +1074,9 @@ class CloudTradeRepository(
         val docId = historyDocId(trade.id, docSuffix, accountKey)
         val docRef = db.collection("users").document(userId).collection("history").document(docId)
         try {
-            val existing = docRef.get().await()
-            val createdAtValue: Any = if (existing.exists()) {
-                existing.getTimestamp("createdAt") ?: FieldValue.serverTimestamp()
+            val existing = runCatching { docRef.get().await() }.getOrNull()
+            val createdAtValue: Any = if (existing != null && existing.exists()) {
+                existing.data?.get("createdAt").toSafeTimestamp() ?: FieldValue.serverTimestamp()
             } else {
                 FieldValue.serverTimestamp()
             }
@@ -735,8 +1087,8 @@ class CloudTradeRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, docRef.path)
-            throw e
+            runCatching { handleFirestoreError(e, OperationType.WRITE, docRef.path) }
+            return docId
         }
     }
 
@@ -756,14 +1108,14 @@ class CloudTradeRepository(
                 .get()
                 .await()
             for (doc in matchingDocs.documents) {
-                if (isDocForAccount(doc.id, "hist", safeKey)) {
+                if (isDocForAccount(doc.id, "hist", safeKey, doc.data)) {
                     doc.reference.delete().await()
                 }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.DELETE, primaryDocRef.path)
+            runCatching { handleFirestoreError(e, OperationType.DELETE, primaryDocRef.path) }
         }
     }
 
@@ -771,14 +1123,11 @@ class CloudTradeRepository(
         val docRef = db.collection("users").document(targetUserId).collection("history").document(docId)
         try {
             val snap = docRef.get().await()
-            return snap.toObject(
-                HistoryTradeDoc::class.java,
-                DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
-            )
+            return parseHistorySnapshot(snap)?.first
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.GET, docRef.path)
+            runCatching { handleFirestoreError(e, OperationType.GET, docRef.path) }
             throw e
         }
     }
@@ -796,45 +1145,32 @@ class CloudTradeRepository(
         val encodedServerName = "$cleanServer|$cleanDepositDate|$cleanLogoType".take(128)
 
         try {
-            val existing = docRef.get().await()
-            if (!existing.exists()) {
-                val createPayload = mapOf(
-                    "userId" to userId,
-                    "balance" to account.balance.safeFinite(0.0),
-                    "deposit" to account.deposit.safeFinite(0.0),
-                    "realizedProfit" to account.realizedProfit.safeFinite(0.0),
-                    "totalSwap" to account.totalSwap.safeFinite(0.0),
-                    "totalCommission" to account.totalCommission.safeFinite(0.0),
-                    "accountName" to account.accountName.ifBlank { "Pasindu Jeewantha Pelanage" }.take(64),
-                    "brokerName" to account.brokerName.ifBlank { "Moneta Markets (Pty) Ltd" }.take(128),
-                    "accountId" to account.accountId.ifBlank { "36054607 - MonetaMarkets-Live" }.take(128),
-                    "serverName" to encodedServerName,
-                    "isReal" to account.isReal,
-                    "createdAt" to FieldValue.serverTimestamp(),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-                docRef.set(createPayload).await()
+            val existing = runCatching { docRef.get().await() }.getOrNull()
+            val createdAtValue: Any = if (existing != null && existing.exists()) {
+                existing.data?.get("createdAt").toSafeTimestamp() ?: FieldValue.serverTimestamp()
             } else {
-                val updatePayload = mapOf(
-                    "balance" to account.balance.safeFinite(0.0),
-                    "deposit" to account.deposit.safeFinite(0.0),
-                    "realizedProfit" to account.realizedProfit.safeFinite(0.0),
-                    "totalSwap" to account.totalSwap.safeFinite(0.0),
-                    "totalCommission" to account.totalCommission.safeFinite(0.0),
-                    "accountName" to account.accountName.ifBlank { "Pasindu Jeewantha Pelanage" }.take(64),
-                    "brokerName" to account.brokerName.ifBlank { "Moneta Markets (Pty) Ltd" }.take(128),
-                    "accountId" to account.accountId.ifBlank { "36054607 - MonetaMarkets-Live" }.take(128),
-                    "serverName" to encodedServerName,
-                    "isReal" to account.isReal,
-                    "updatedAt" to FieldValue.serverTimestamp()
-                )
-                docRef.update(updatePayload).await()
+                FieldValue.serverTimestamp()
             }
+            val payload = mapOf(
+                "userId" to userId,
+                "balance" to account.balance.safeFinite(0.0),
+                "deposit" to account.deposit.safeFinite(0.0),
+                "realizedProfit" to account.realizedProfit.safeFinite(0.0),
+                "totalSwap" to account.totalSwap.safeFinite(0.0),
+                "totalCommission" to account.totalCommission.safeFinite(0.0),
+                "accountName" to account.accountName.ifBlank { "Pasindu Jeewantha Pelanage" }.take(64),
+                "brokerName" to account.brokerName.ifBlank { "Moneta Markets (Pty) Ltd" }.take(128),
+                "accountId" to account.accountId.ifBlank { "36054607 - MonetaMarkets-Live" }.take(128),
+                "serverName" to encodedServerName,
+                "isReal" to account.isReal,
+                "createdAt" to createdAtValue,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            docRef.set(payload).await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.WRITE, docRef.path)
-            throw e
+            runCatching { handleFirestoreError(e, OperationType.WRITE, docRef.path) }
         }
     }
 
@@ -851,7 +1187,7 @@ class CloudTradeRepository(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.DELETE, accRef.path)
+            runCatching { handleFirestoreError(e, OperationType.DELETE, accRef.path) }
         }
     }
 
@@ -863,14 +1199,14 @@ class CloudTradeRepository(
         try {
             val snap = colRef.whereEqualTo("userId", userId).get().await()
             for (doc in snap.documents) {
-                if (accountKey == null || isDocForAccount(doc.id, "pos", accountKey)) {
+                if (accountKey == null || isDocForAccount(doc.id, "pos", accountKey, doc.data)) {
                     doc.reference.delete().await()
                 }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.DELETE, colRef.path)
+            runCatching { handleFirestoreError(e, OperationType.DELETE, colRef.path) }
         }
     }
 
@@ -882,14 +1218,14 @@ class CloudTradeRepository(
         try {
             val snap = colRef.whereEqualTo("userId", userId).get().await()
             for (doc in snap.documents) {
-                if (accountKey == null || isDocForAccount(doc.id, "hist", accountKey)) {
+                if (accountKey == null || isDocForAccount(doc.id, "hist", accountKey, doc.data)) {
                     doc.reference.delete().await()
                 }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            handleFirestoreError(e, OperationType.DELETE, colRef.path)
+            runCatching { handleFirestoreError(e, OperationType.DELETE, colRef.path) }
         }
     }
 }

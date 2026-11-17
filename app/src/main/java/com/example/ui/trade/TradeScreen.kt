@@ -257,12 +257,14 @@ fun TradeScreen(
             }
             HorizontalDivider(thickness = 0.7.dp, color = Color(0xFFE0E3E7))
 
+            val uniquePositions = remember(positions) { positions.distinctBy { it.id } }
+
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Color.White)
             ) {
-                items(positions, key = { it.id }) { pos ->
+                items(uniquePositions, key = { it.id }) { pos ->
                     val digits = digitsMap[pos.symbol]
                         ?: if (pos.symbol.contains("XAU") || pos.symbol.contains("BTC") || pos.symbol.contains("NDX")) 2 else 5
                     PositionRow(
