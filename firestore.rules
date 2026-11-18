@@ -16,10 +16,6 @@ service cloud.firestore {
       return request.resource.data;
     }
 
-    function existing() {
-      return resource.data;
-    }
-
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -28,59 +24,65 @@ service cloud.firestore {
       return val is int || val is float;
     }
 
-    function isValidPosition(data) {
-      return data.userId is string &&
-             data.userId == request.auth.uid &&
-             data.userId.size() >= 1 && data.userId.size() <= 128 &&
-             data.ticketId is int && data.ticketId > 0 &&
-             data.symbol is string && data.symbol.size() >= 2 && data.symbol.size() <= 32 &&
-             data.isBuy is bool &&
-             isNum(data.lots) && data.lots > 0 && data.lots <= 1000 &&
-             isNum(data.openPrice) && data.openPrice > 0 &&
-             isNum(data.currentPrice) && data.currentPrice > 0 &&
-             isNum(data.profit) &&
-             data.openTime is string && data.openTime.size() >= 1 && data.openTime.size() <= 64 &&
-             (!('sl' in data) || data.sl == null || (isNum(data.sl) && data.sl >= 0)) &&
-             (!('tp' in data) || data.tp == null || (isNum(data.tp) && data.tp >= 0)) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    function isValidTicket(val) {
+      return (val is int && val > 0) ||
+             (val is float && val > 0) ||
+             (val is string && val.size() >= 1 && val.size() <= 64);
     }
 
-    function isValidHistoryTrade(data) {
-      return data.userId is string &&
-             data.userId == request.auth.uid &&
-             data.userId.size() >= 1 && data.userId.size() <= 128 &&
-             data.ticketId is int && data.ticketId > 0 &&
-             data.symbol is string && data.symbol.size() >= 2 && data.symbol.size() <= 32 &&
-             data.isBuy is bool &&
+    function isValidPosition(data, userId) {
+      return (!('userId' in data) || (data.userId is string && data.userId == userId)) &&
+             (!('ticketId' in data) || data.ticketId == null || isValidTicket(data.ticketId)) &&
+             data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 &&
+             (!('isBuy' in data) || data.isBuy is bool) &&
+             (!('buy' in data) || data.buy is bool) &&
+             isNum(data.lots) && data.lots > 0 && data.lots <= 1000 &&
+             isNum(data.openPrice) && data.openPrice > 0 &&
+             (!('currentPrice' in data) || data.currentPrice == null || (isNum(data.currentPrice) && data.currentPrice > 0)) &&
+             isNum(data.profit) &&
+             data.openTime is string && data.openTime.size() >= 1 && data.openTime.size() <= 160 &&
+             (!('sl' in data) || data.sl == null || (isNum(data.sl) && data.sl >= 0)) &&
+             (!('tp' in data) || data.tp == null || (isNum(data.tp) && data.tp >= 0)) &&
+             (!('swap' in data) || data.swap == null || isNum(data.swap)) &&
+             (!('commission' in data) || data.commission == null || isNum(data.commission)) &&
+             (!('createdAt' in data) || data.createdAt == null || data.createdAt is timestamp || data.createdAt is string || isNum(data.createdAt)) &&
+             (!('updatedAt' in data) || data.updatedAt == null || data.updatedAt is timestamp || data.updatedAt is string || isNum(data.updatedAt));
+    }
+
+    function isValidHistoryTrade(data, userId) {
+      return (!('userId' in data) || (data.userId is string && data.userId == userId)) &&
+             (!('ticketId' in data) || data.ticketId == null || isValidTicket(data.ticketId)) &&
+             data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 &&
+             (!('isBuy' in data) || data.isBuy is bool) &&
+             (!('buy' in data) || data.buy is bool) &&
              isNum(data.lots) && data.lots > 0 && data.lots <= 1000 &&
              isNum(data.openPrice) && data.openPrice > 0 &&
              isNum(data.closePrice) && data.closePrice > 0 &&
              isNum(data.profit) &&
              data.openTime is string && data.openTime.size() >= 1 && data.openTime.size() <= 160 &&
              data.closeTime is string && data.closeTime.size() >= 1 && data.closeTime.size() <= 64 &&
-             isNum(data.commission) &&
-             isNum(data.swap) &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+             (!('commission' in data) || data.commission == null || isNum(data.commission)) &&
+             (!('swap' in data) || data.swap == null || isNum(data.swap)) &&
+             (!('sl' in data) || data.sl == null || (isNum(data.sl) && data.sl >= 0)) &&
+             (!('tp' in data) || data.tp == null || (isNum(data.tp) && data.tp >= 0)) &&
+             (!('createdAt' in data) || data.createdAt == null || data.createdAt is timestamp || data.createdAt is string || isNum(data.createdAt)) &&
+             (!('updatedAt' in data) || data.updatedAt == null || data.updatedAt is timestamp || data.updatedAt is string || isNum(data.updatedAt));
     }
 
-    function isValidAccount(data) {
-      return data.userId is string &&
-             data.userId == request.auth.uid &&
-             data.userId.size() >= 1 && data.userId.size() <= 128 &&
+    function isValidAccount(data, userId) {
+      return (!('userId' in data) || (data.userId is string && data.userId == userId)) &&
              isNum(data.balance) &&
              isNum(data.deposit) &&
              isNum(data.realizedProfit) &&
-             isNum(data.totalSwap) &&
-             isNum(data.totalCommission) &&
+             (!('totalSwap' in data) || data.totalSwap == null || isNum(data.totalSwap)) &&
+             (!('totalCommission' in data) || data.totalCommission == null || isNum(data.totalCommission)) &&
              data.accountName is string && data.accountName.size() >= 1 && data.accountName.size() <= 64 &&
              data.brokerName is string && data.brokerName.size() >= 1 && data.brokerName.size() <= 128 &&
              data.accountId is string && data.accountId.size() >= 1 && data.accountId.size() <= 128 &&
              data.serverName is string && data.serverName.size() >= 1 && data.serverName.size() <= 128 &&
-             data.isReal is bool &&
-             data.createdAt is timestamp && data.createdAt <= request.time &&
-             data.updatedAt is timestamp && data.updatedAt <= request.time;
+             (!('isReal' in data) || data.isReal is bool) &&
+             (!('createdAt' in data) || data.createdAt == null || data.createdAt is timestamp || data.createdAt is string || isNum(data.createdAt)) &&
+             (!('updatedAt' in data) || data.updatedAt == null || data.updatedAt is timestamp || data.updatedAt is string || isNum(data.updatedAt));
     }
 
     match /users/{userId}/positions/{positionId} {
@@ -91,47 +93,27 @@ service cloud.firestore {
 
       allow list: if isSignedIn() &&
                      request.auth.uid == userId &&
-                     existing().userId == request.auth.uid;
+                     isValidId(userId);
 
-      allow create: if isSignedIn() &&
-                       request.auth.uid == userId &&
-                       isValidId(userId) &&
-                       isValidId(positionId) &&
-                       incoming().keys().hasAll([
-                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
-                         'openPrice', 'currentPrice', 'profit', 'openTime',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
-                         'openPrice', 'currentPrice', 'sl', 'tp', 'profit',
-                         'openTime', 'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidPosition(incoming());
-
-      allow update: if isSignedIn() &&
-                       request.auth.uid == userId &&
-                       isValidId(userId) &&
-                       isValidId(positionId) &&
-                       incoming().keys().hasAll([
-                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
-                         'openPrice', 'currentPrice', 'profit', 'openTime',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
-                         'openPrice', 'currentPrice', 'sl', 'tp', 'profit',
-                         'openTime', 'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidPosition(incoming()) &&
-                       incoming().userId == existing().userId &&
-                       incoming().createdAt == existing().createdAt;
+      allow create, update: if isSignedIn() &&
+                               request.auth.uid == userId &&
+                               isValidId(userId) &&
+                               isValidId(positionId) &&
+                               incoming().keys().hasAll([
+                                 'symbol', 'lots', 'openPrice', 'profit', 'openTime'
+                               ]) &&
+                               incoming().keys().hasOnly([
+                                 'id', 'userId', 'ticketId', 'ticket', 'symbol', 'isBuy', 'buy',
+                                 'side', 'type', 'lots', 'openPrice', 'currentPrice', 'sl', 'tp',
+                                 'profit', 'swap', 'commission', 'openTime', 'accountKey', 'key',
+                                 'createdAt', 'updatedAt'
+                               ]) &&
+                               isValidPosition(incoming(), userId);
 
       allow delete: if isSignedIn() &&
                        request.auth.uid == userId &&
                        isValidId(userId) &&
-                       isValidId(positionId) &&
-                       existing().userId == request.auth.uid;
+                       isValidId(positionId);
     }
 
     match /users/{userId}/history/{historyId} {
@@ -142,47 +124,28 @@ service cloud.firestore {
 
       allow list: if isSignedIn() &&
                      request.auth.uid == userId &&
-                     existing().userId == request.auth.uid;
+                     isValidId(userId);
 
-      allow create: if isSignedIn() &&
-                       request.auth.uid == userId &&
-                       isValidId(userId) &&
-                       isValidId(historyId) &&
-                       incoming().keys().hasAll([
-                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
-                         'openPrice', 'closePrice', 'profit', 'openTime',
-                         'closeTime', 'commission', 'swap', 'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
-                         'openPrice', 'closePrice', 'profit', 'openTime',
-                         'closeTime', 'commission', 'swap', 'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidHistoryTrade(incoming());
-
-      allow update: if isSignedIn() &&
-                       request.auth.uid == userId &&
-                       isValidId(userId) &&
-                       isValidId(historyId) &&
-                       incoming().keys().hasAll([
-                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
-                         'openPrice', 'closePrice', 'profit', 'openTime',
-                         'closeTime', 'commission', 'swap', 'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'userId', 'ticketId', 'symbol', 'isBuy', 'lots',
-                         'openPrice', 'closePrice', 'profit', 'openTime',
-                         'closeTime', 'commission', 'swap', 'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidHistoryTrade(incoming()) &&
-                       incoming().userId == existing().userId &&
-                       incoming().createdAt == existing().createdAt;
+      allow create, update: if isSignedIn() &&
+                               request.auth.uid == userId &&
+                               isValidId(userId) &&
+                               isValidId(historyId) &&
+                               incoming().keys().hasAll([
+                                 'symbol', 'lots', 'openPrice', 'closePrice', 'profit', 'openTime', 'closeTime'
+                               ]) &&
+                               incoming().keys().hasOnly([
+                                 'id', 'userId', 'ticketId', 'ticket', 'symbol', 'isBuy', 'buy',
+                                 'side', 'type', 'lots', 'openPrice', 'closePrice', 'profit',
+                                 'openTime', 'closeTime', 'commission', 'swap', 'sl', 'tp',
+                                 'isWithdrawal', 'comment', 'hitOutcome', 'accountKey', 'key',
+                                 'createdAt', 'updatedAt'
+                               ]) &&
+                               isValidHistoryTrade(incoming(), userId);
 
       allow delete: if isSignedIn() &&
                        request.auth.uid == userId &&
                        isValidId(userId) &&
-                       isValidId(historyId) &&
-                       existing().userId == request.auth.uid;
+                       isValidId(historyId);
     }
 
     match /users/{userId}/accounts/{accountDocId} {
@@ -193,44 +156,30 @@ service cloud.firestore {
 
       allow list: if isSignedIn() &&
                      request.auth.uid == userId &&
-                     existing().userId == request.auth.uid;
+                     isValidId(userId);
 
-      allow create: if isSignedIn() &&
-                       request.auth.uid == userId &&
-                       isValidId(userId) &&
-                       isValidId(accountDocId) &&
-                       incoming().keys().hasAll([
-                         'userId', 'balance', 'deposit', 'realizedProfit',
-                         'totalSwap', 'totalCommission', 'accountName',
-                         'brokerName', 'accountId', 'serverName', 'isReal',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       incoming().keys().hasOnly([
-                         'userId', 'balance', 'deposit', 'realizedProfit',
-                         'totalSwap', 'totalCommission', 'accountName',
-                         'brokerName', 'accountId', 'serverName', 'isReal',
-                         'createdAt', 'updatedAt'
-                       ]) &&
-                       isValidAccount(incoming());
-
-      allow update: if isSignedIn() &&
-                       request.auth.uid == userId &&
-                       isValidId(userId) &&
-                       isValidId(accountDocId) &&
-                       isValidAccount(incoming()) &&
-                       incoming().userId == existing().userId &&
-                       incoming().createdAt == existing().createdAt &&
-                       incoming().diff(existing()).affectedKeys().hasOnly([
-                         'balance', 'deposit', 'realizedProfit', 'totalSwap',
-                         'totalCommission', 'accountName', 'brokerName',
-                         'accountId', 'serverName', 'isReal', 'updatedAt'
-                       ]);
+      allow create, update: if isSignedIn() &&
+                               request.auth.uid == userId &&
+                               isValidId(userId) &&
+                               isValidId(accountDocId) &&
+                               incoming().keys().hasAll([
+                                 'balance', 'deposit', 'realizedProfit',
+                                 'accountName', 'brokerName', 'accountId', 'serverName'
+                               ]) &&
+                               incoming().keys().hasOnly([
+                                 'id', 'key', 'userId', 'balance', 'deposit', 'realizedProfit',
+                                 'totalSwap', 'totalCommission', 'swap', 'commission',
+                                 'accountName', 'brokerName', 'accountId', 'serverName',
+                                 'isReal', 'real', 'depositDate', 'logoType',
+                                 'createdAt', 'updatedAt'
+                               ]) &&
+                               isValidAccount(incoming(), userId);
 
       allow delete: if isSignedIn() &&
                        request.auth.uid == userId &&
                        isValidId(userId) &&
-                       isValidId(accountDocId) &&
-                       existing().userId == request.auth.uid;
+                       isValidId(accountDocId);
     }
   }
 }
+

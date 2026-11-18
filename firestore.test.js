@@ -219,3 +219,46 @@ test("Authenticated user can update their own history trade in-place without del
   );
 });
 
+test("iOS Web SDK position and history documents (unprefixed ID, string ticketId, integer numbers, no createdAt) can be created, listed, updated, and deleted", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const iosPosRef = aliceDb
+    .collection("users")
+    .doc(ALICE_UID)
+    .collection("positions")
+    .doc("387200105");
+
+  await assertSucceeds(
+    iosPosRef.set({
+      ticketId: "#387200105",
+      symbol: "XAUUSD",
+      isBuy: false,
+      lots: 1,
+      openPrice: 4550,
+      currentPrice: 4540,
+      sl: 4560,
+      tp: 4520,
+      profit: 1000,
+      openTime: "2026.11.08 08:00:00|4560|4520|#387200105",
+    })
+  );
+
+  // Unfiltered subcollection list (used by observeOpenPositions) succeeds
+  const listSnap = await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("positions").get()
+  );
+  if (listSnap.docs.length !== 1) {
+    throw new Error(`Expected 1 position doc, got ${listSnap.docs.length}`);
+  }
+
+  // Updating SL/TP via set() or update() without createdAt succeeds
+  await assertSucceeds(
+    iosPosRef.update({
+      sl: 4555,
+      tp: 4510,
+    })
+  );
+
+  await assertSucceeds(iosPosRef.delete());
+});
+
+

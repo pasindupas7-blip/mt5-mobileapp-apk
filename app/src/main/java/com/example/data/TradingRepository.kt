@@ -2318,56 +2318,8 @@ class TradingRepository(private val scope: CoroutineScope) {
         activeListenerAccKey = targetAccKey
         lastListenerStartMs = now
 
-        val initialPositionsSnapshot = _positions.value
-            .filter { it.id !in deletedPositionIds(targetAccKey) }
-            .map { repairExistingPosition(it) }
-            .distinctBy { it.id }
-
         cloudPositionsJob = scope.launch(Dispatchers.IO) {
             try {
-                // Fetch existing cloud open positions, merge with local without deleting any existing position,
-                // repair all positions, and save repaired positions back to Cloud & Local.
-                val existingServerPositions = try {
-                    cloud.fetchOpenPositionsOnce(uid, targetAccKey)
-                } catch (t: Throwable) {
-                    emptyList()
-                }
-                val combinedInitialPositions = LinkedHashMap<Long, TradePosition>()
-                for (sPos in existingServerPositions) {
-                    if (sPos.id !in deletedPositionIds(targetAccKey)) {
-                        combinedInitialPositions[sPos.id] = repairExistingPosition(sPos)
-                    }
-                }
-                for (lPos in initialPositionsSnapshot) {
-                    if (lPos.id !in deletedPositionIds(targetAccKey)) {
-                        combinedInitialPositions[lPos.id] = repairExistingPosition(lPos)
-                    }
-                }
-                if (activeAccountKey == targetAccKey && combinedInitialPositions.isNotEmpty()) {
-                    _positions.value = combinedInitialPositions.values.toList()
-                    recalculatePositionsAndAccount(_quotes.value)
-                    persistActiveAccountLocal()
-                }
-                for (pos in combinedInitialPositions.values) {
-                    try {
-                        cloud.saveOpenPosition(pos, uid, targetAccKey)
-                    } catch (ignored: Throwable) {
-                    }
-                }
-
-                // Also upload repaired open positions for any other local accounts in the background
-                for ((accKey, posList) in positionsByAccount) {
-                    if (accKey != targetAccKey) {
-                        val delSet = deletedPositionIds(accKey)
-                        for (pos in posList.filter { it.id !in delSet }) {
-                            try {
-                                cloud.saveOpenPosition(repairExistingPosition(pos), uid, accKey)
-                            } catch (ignored: Throwable) {
-                            }
-                        }
-                    }
-                }
-
                 cloud.observeOpenPositions(uid, targetAccKey)
                     .catch { /* Handled by handleFirestoreError */ }
                     .collect { serverPositions ->
@@ -2391,12 +2343,11 @@ class TradingRepository(private val scope: CoroutineScope) {
                                     mergedMap[sPos.id] = if (localPos != null && recentlyEdited) localPos else sPos
                                 }
 
-                                // Preserve any local non-deleted position not yet present on the server and upload it
-                                val missingOnServer = mutableListOf<TradePosition>()
+                                // Only retain local positions not yet in snapshot if they were created/edited in the last 8s
                                 for (lPos in currentLocal) {
-                                    if (!mergedMap.containsKey(lPos.id)) {
+                                    val recentlyEdited = nowMs - (recentlyModifiedPositionMs[lPos.id] ?: 0L) < 8_000L
+                                    if (!mergedMap.containsKey(lPos.id) && recentlyEdited) {
                                         mergedMap[lPos.id] = lPos
-                                        missingOnServer.add(lPos)
                                     }
                                 }
 
@@ -2409,19 +2360,6 @@ class TradingRepository(private val scope: CoroutineScope) {
                                 }
                                 recalculatePositionsAndAccount(_quotes.value)
                                 persistActiveAccountLocal()
-
-                                if (missingOnServer.isNotEmpty()) {
-                                    scope.launch(Dispatchers.IO) {
-                                        for (missing in missingOnServer) {
-                                            if (missing.id !in deletedPositionIds(targetAccKey)) {
-                                                try {
-                                                    cloud.saveOpenPosition(missing, uid, targetAccKey)
-                                                } catch (ignored: Throwable) {
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
                             }
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
@@ -2436,80 +2374,6 @@ class TradingRepository(private val scope: CoroutineScope) {
 
         cloudHistoryJob = scope.launch(Dispatchers.IO) {
             try {
-                val delHistSet = deletedHistoryIds(targetAccKey)
-
-                // Fetch existing server history first so we can merge & repair ALL user trades (both Cloud and Local)
-                // without ever deleting any user trade.
-                val existingServerHistory = try {
-                    cloud.fetchTradeHistoryOnce(uid, targetAccKey)
-                } catch (t: Throwable) {
-                    emptyList()
-                }
-                if (targetAccKey == "main" && existingServerHistory.isNotEmpty()) {
-                    val serverIds = existingServerHistory.map { it.id }.toSet()
-                    var seedDeletedChanged = false
-                    for (seed in initialHistory) {
-                        val localMatch = _history.value.find { it.id == seed.id }
-                        val wasEditedLocally = (recentlyModifiedHistoryMs[seed.id] ?: 0L) > 0L
-                        if (seed.id !in serverIds && localMatch == seed && !wasEditedLocally) {
-                            delHistSet.add(seed.id)
-                            seedDeletedChanged = true
-                        }
-                    }
-                    if (seedDeletedChanged) {
-                        _history.update { list -> list.filter { it.id !in delHistSet } }
-                        localStorage?.saveDeletedHistoryIdsForAccount("main", delHistSet)
-                    }
-                }
-
-                // Combine and auto-repair every trade from both Cloud and Local storage, then persist to both
-                val mergedInitialHistoryMap = LinkedHashMap<Long, HistoryTrade>()
-                for (sTrade in existingServerHistory) {
-                    if (sTrade.id !in delHistSet) {
-                        val localMatch = _history.value.find { it.id == sTrade.id }
-                        mergedInitialHistoryMap[sTrade.id] = mergeTradeRecordsPreservingMetadata(sTrade, localMatch)
-                    }
-                }
-                for (lTrade in _history.value) {
-                    if (lTrade.id !in delHistSet) {
-                        val serverMatch = existingServerHistory.find { it.id == lTrade.id }
-                        val recentlyEdited = System.currentTimeMillis() - (recentlyModifiedHistoryMs[lTrade.id] ?: 0L) < 8_000L
-                        mergedInitialHistoryMap[lTrade.id] = if (serverMatch != null && !recentlyEdited) {
-                            mergeTradeRecordsPreservingMetadata(serverMatch, lTrade)
-                        } else {
-                            mergeTradeRecordsPreservingMetadata(lTrade, serverMatch)
-                        }
-                    }
-                }
-
-                val repairedAllHistory = sortHistoryChronologically(mergedInitialHistoryMap.values.toList())
-                if (activeAccountKey == targetAccKey && repairedAllHistory.isNotEmpty()) {
-                    _history.value = repairedAllHistory
-                    recalculatePositionsAndAccount(_quotes.value)
-                    persistActiveAccountLocal()
-                }
-
-                // Upload all repaired trades back to Cloud so Firestore documents permanently store repaired BUY/SELL & metadata
-                for (hist in repairedAllHistory) {
-                    try {
-                        cloud.addHistoryTrade(hist, userId = uid, accountKey = targetAccKey)
-                    } catch (ignored: Throwable) {
-                    }
-                }
-
-                // Also upload repaired history trades for any other local accounts in the background
-                for ((accKey, histList) in historyByAccount) {
-                    if (accKey != targetAccKey) {
-                        val otherDelSet = deletedHistoryIds(accKey)
-                        for (hist in histList.filter { it.id !in otherDelSet }) {
-                            try {
-                                cloud.addHistoryTrade(repairExistingHistoryTrade(hist), userId = uid, accountKey = accKey)
-                            } catch (ignored: Throwable) {
-                            }
-                        }
-                    }
-                }
-
                 cloud.observeTradeHistory(uid, targetAccKey)
                     .catch { /* Handled by handleFirestoreError */ }
                     .collect { serverHistory ->
@@ -2537,13 +2401,11 @@ class TradingRepository(private val scope: CoroutineScope) {
                                     }
                                 }
 
-                                // Preserve any local non-deleted history trade/withdrawal not yet present on the server and upload it
-                                val missingOnServer = mutableListOf<HistoryTrade>()
+                                // Only retain local history deals not yet in snapshot if they were created/edited in the last 8s
                                 for (lTrade in currentLocal) {
-                                    if (!mergedMap.containsKey(lTrade.id)) {
-                                        val repairedLocal = repairExistingHistoryTrade(lTrade)
-                                        mergedMap[lTrade.id] = repairedLocal
-                                        missingOnServer.add(repairedLocal)
+                                    val recentlyEdited = nowMs - (recentlyModifiedHistoryMs[lTrade.id] ?: 0L) < 8_000L
+                                    if (!mergedMap.containsKey(lTrade.id) && recentlyEdited) {
+                                        mergedMap[lTrade.id] = repairExistingHistoryTrade(lTrade)
                                     }
                                 }
 
@@ -2557,19 +2419,6 @@ class TradingRepository(private val scope: CoroutineScope) {
                                 recalculatePositionsAndAccount(_quotes.value)
                                 persistActiveAccountLocal()
                                 refreshSymbolCandlesWithTrades(currentActiveSymbol)
-
-                                if (missingOnServer.isNotEmpty()) {
-                                    scope.launch(Dispatchers.IO) {
-                                        for (missing in missingOnServer) {
-                                            if (missing.id !in deletedHistoryIds(targetAccKey)) {
-                                                try {
-                                                    cloud.addHistoryTrade(missing, userId = uid, accountKey = targetAccKey)
-                                                } catch (ignored: Throwable) {
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
                             }
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
@@ -2584,83 +2433,23 @@ class TradingRepository(private val scope: CoroutineScope) {
 
         cloudAccountJob = scope.launch(Dispatchers.IO) {
             try {
-                // Fetch existing accounts from Cloud FIRST so a fresh install never overwrites Cloud accounts
-                val existingCloudDocs = try {
-                    cloud.fetchAllAccountsOnce(uid)
-                } catch (t: Throwable) {
-                    emptyList()
-                }
-                if (existingCloudDocs.isNotEmpty()) {
-                    val cloudKeys = existingCloudDocs.map { it.id.ifBlank { "main" } }.toSet()
-                    val mergedAccounts = LinkedHashMap<String, AccountInfo>()
-                    for (doc in existingCloudDocs) {
-                        val docKey = doc.id.ifBlank { "main" }
-                        val localMatch = _accounts.value.find { it.key == docKey }
-                        val restored = doc.toDomain(
-                            equity = localMatch?.equity ?: doc.balance,
-                            margin = localMatch?.margin ?: 0.0,
-                            freeMargin = localMatch?.freeMargin ?: doc.balance,
-                            marginLevel = localMatch?.marginLevel ?: 0.0,
-                            floatingPnL = localMatch?.floatingPnL ?: 0.0
-                        ).copy(
-                            key = docKey,
-                            deposit = doc.deposit.coerceAtLeast(0.0)
-                        )
-                        mergedAccounts[docKey] = restored
-                    }
-                    for (localAcc in _accounts.value) {
-                        val lKey = localAcc.key.ifBlank { "main" }
-                        if (!mergedAccounts.containsKey(lKey)) {
-                            mergedAccounts[lKey] = localAcc
-                            try {
-                                cloud.saveOrUpdateAccount(localAcc, uid, lKey)
-                            } catch (ignored: Throwable) {
-                            }
-                        }
-                    }
-                    val allAccountsList = mergedAccounts.values.toList()
-                    _accounts.value = allAccountsList
-                    val resolvedActive = allAccountsList.find { it.key == targetAccKey } ?: allAccountsList.first()
-                    activeAccountKey = resolvedActive.key.ifBlank { "main" }
-                    _account.value = resolvedActive
-                    recalculatePositionsAndAccount(_quotes.value)
-                    persistActiveAccountLocal()
-                    if (activeAccountKey != targetAccKey && activeAccountKey in cloudKeys) {
-                        startCloudListeners(uid, cloud, forceRestart = true)
-                        return@launch
-                    }
-                } else {
-                    if (_accounts.value.isEmpty()) {
-                        val defaultMain = AccountInfo(key = "main")
-                        activeAccountKey = "main"
-                        _accounts.value = listOf(defaultMain)
-                        _account.value = defaultMain
-                        recalculatePositionsAndAccount(_quotes.value)
-                        persistActiveAccountLocal()
-                    }
-                    try {
-                        for (acc in _accounts.value) {
-                            cloud.saveOrUpdateAccount(acc, uid, acc.key)
-                        }
-                    } catch (ignored: Throwable) {
-                    }
-                }
-
                 cloud.observeAllAccountDocs(uid)
                     .catch { /* Handled by handleFirestoreError */ }
                     .collect { accountDocs ->
                         try {
                             if (accountDocs.isEmpty()) {
-                                if (_accounts.value.isNotEmpty()) {
-                                    try {
-                                        cloud.saveOrUpdateAccount(_account.value, uid, targetAccKey)
-                                    } catch (ignored: Throwable) {
-                                    }
+                                if (_accounts.value.isEmpty()) {
+                                    val defaultMain = AccountInfo(key = "main")
+                                    activeAccountKey = "main"
+                                    _accounts.value = listOf(defaultMain)
+                                    _account.value = defaultMain
+                                    recalculatePositionsAndAccount(_quotes.value)
+                                    persistActiveAccountLocal()
                                 }
                                 return@collect
                             }
 
-                            // Merge any cloud accounts into _accounts.value
+                            val cloudKeys = accountDocs.map { it.id.ifBlank { "main" } }.toSet()
                             val currentAccounts = _accounts.value.toMutableList()
                             var accountsListUpdated = false
                             for (doc in accountDocs) {
@@ -2673,57 +2462,6 @@ class TradingRepository(private val scope: CoroutineScope) {
                                     )
                                     currentAccounts.add(restoredAcc)
                                     accountsListUpdated = true
-                                    // Preload and auto-repair positions and history for restored secondary account
-                                    scope.launch(Dispatchers.IO) {
-                                        try {
-                                            val cloudPos = cloud.fetchOpenPositionsOnce(uid, docKey)
-                                                .filter { it.id !in deletedPositionIds(docKey) }
-                                                .map { repairExistingPosition(it) }
-                                            val localPos = positionsByAccount[docKey].orEmpty()
-                                                .filter { it.id !in deletedPositionIds(docKey) }
-                                                .map { repairExistingPosition(it) }
-                                            val mergedPos = (cloudPos + localPos).distinctBy { it.id }
-                                            if (mergedPos.isNotEmpty() || positionsByAccount[docKey].isNullOrEmpty()) {
-                                                positionsByAccount[docKey] = mergedPos
-                                                localStorage?.savePositionsForAccount(docKey, mergedPos)
-                                                for (pos in mergedPos) {
-                                                    try {
-                                                        cloud.saveOpenPosition(pos, uid, docKey)
-                                                    } catch (ignored: Throwable) {
-                                                    }
-                                                }
-                                            }
-
-                                            val cloudHist = cloud.fetchTradeHistoryOnce(uid, docKey)
-                                                .filter { it.id !in deletedHistoryIds(docKey) }
-                                                .map { repairExistingHistoryTrade(it) }
-                                            val localHist = historyByAccount[docKey].orEmpty()
-                                                .filter { it.id !in deletedHistoryIds(docKey) }
-                                                .map { repairExistingHistoryTrade(it) }
-                                            val mergedHistMap = LinkedHashMap<Long, HistoryTrade>()
-                                            for (cTrade in cloudHist) {
-                                                val lMatch = localHist.find { it.id == cTrade.id }
-                                                mergedHistMap[cTrade.id] = mergeTradeRecordsPreservingMetadata(cTrade, lMatch)
-                                            }
-                                            for (lTrade in localHist) {
-                                                if (!mergedHistMap.containsKey(lTrade.id)) {
-                                                    mergedHistMap[lTrade.id] = lTrade
-                                                }
-                                            }
-                                            val sorted = sortHistoryChronologically(mergedHistMap.values.toList())
-                                            if (sorted.isNotEmpty() || historyByAccount[docKey].isNullOrEmpty()) {
-                                                historyByAccount[docKey] = sorted
-                                                localStorage?.saveHistoryForAccount(docKey, sorted)
-                                                for (hist in sorted) {
-                                                    try {
-                                                        cloud.addHistoryTrade(hist, userId = uid, accountKey = docKey)
-                                                    } catch (ignored: Throwable) {
-                                                    }
-                                                }
-                                            }
-                                        } catch (ignored: Throwable) {
-                                        }
-                                    }
                                 } else if (docKey != activeAccountKey) {
                                     val existingAcc = currentAccounts[existingIdx]
                                     val mergedOther = doc.toDomain(
@@ -2765,6 +2503,17 @@ class TradingRepository(private val scope: CoroutineScope) {
                                 _account.value = merged
                                 recalculatePositionsAndAccount(_quotes.value)
                                 persistActiveAccountLocal()
+                            } else if (activeAccountKey !in cloudKeys && currentAccounts.isNotEmpty()) {
+                                val resolvedActive = currentAccounts.find { it.key == "main" } ?: currentAccounts.first()
+                                val nextKey = resolvedActive.key.ifBlank { "main" }
+                                if (nextKey != targetAccKey) {
+                                    activeAccountKey = nextKey
+                                    _account.value = resolvedActive
+                                    recalculatePositionsAndAccount(_quotes.value)
+                                    persistActiveAccountLocal()
+                                    startCloudListeners(uid, cloud, forceRestart = true)
+                                    return@collect
+                                }
                             }
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e

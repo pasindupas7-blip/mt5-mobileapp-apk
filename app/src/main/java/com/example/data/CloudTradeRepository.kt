@@ -468,27 +468,52 @@ class CloudTradeRepository(
 
     /**
      * Crash-proof manual parser for open positions that works identically for Android and iOS Firestore documents.
-     * Avoids `DocumentSnapshot.toObject()` so documents containing an `"id"` field or differing iOS types never throw RuntimeException.
+     * Supports both plain `openTime` strings with top-level `sl`/`tp` fields and pipe-encoded `"openTime|sl|tp|ticketId"` strings,
+     * and reads numeric fields via `(as? Number)?.toDouble()` so integer Long values from the iOS Web SDK are never dropped.
      */
     private fun parsePositionSnapshot(snap: DocumentSnapshot): Pair<TradePositionDoc, TradePosition>? {
         return try {
             if (!snap.exists()) return null
             val data = snap.data ?: return null
             val docId = snap.id
-            val rawTicket = data["ticketId"] ?: data["ticket"] ?: data["id"]
+
+            val rawOpenTimeFull = (snap.getString("openTime") ?: (data["openTime"] ?: data["entryTime"] ?: data["time"]).toSafeDateTimeString()).trim()
+            val openParts = rawOpenTimeFull.split("|")
+            val cleanOpenTime = openParts.firstOrNull()?.trim().orEmpty()
+            val pipeSl = openParts.getOrNull(1)?.trim()?.toDoubleOrNull()?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }
+            val pipeTp = openParts.getOrNull(2)?.trim()?.toDoubleOrNull()?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }
+            val pipeTicket = openParts.getOrNull(3)?.removePrefix("#")?.trim()?.takeIf { it.isNotEmpty() }
+            val pipeSide = openParts.getOrNull(5)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: openParts.getOrNull(4)?.trim()?.takeIf { it.isNotEmpty() }
+
+            val extractedTicketStr = snap.getString("ticketId")?.removePrefix("#")?.trim()?.takeIf { it.isNotEmpty() }
+                ?: (snap.get("ticketId") as? Number)?.toLong()?.toString()
+                ?: pipeTicket
+                ?: docId.removePrefix("pos_").substringAfterLast("_").removePrefix("#").trim()
+
+            val rawTicket: Any = extractedTicketStr.ifEmpty { data["ticketId"] ?: data["ticket"] ?: data["id"] ?: docId.removePrefix("pos_") }
             val ticketLong = resolveUniqueDocDomainId(docId, rawTicket, 100_000L)
-            val rawSymbol = (data["symbol"] ?: data["pair"] ?: data["instrument"])?.toString()?.trim().orEmpty()
-            val rawSideStr = (data["side"] ?: data["type"] ?: data["orderType"] ?: data["direction"] ?: data["action"])?.toString()
-            val rawBuyBool = data["isBuy"].toSafeBoolean()
+
+            val rawSymbol = (snap.getString("symbol") ?: (data["symbol"] ?: data["pair"] ?: data["instrument"])?.toString())?.trim().orEmpty()
+            val rawSideStr = (data["side"] ?: data["type"] ?: data["orderType"] ?: data["direction"] ?: data["action"])?.toString() ?: pipeSide
+            val rawBuyBool = (snap.get("isBuy") as? Boolean)
+                ?: (snap.get("buy") as? Boolean)
+                ?: data["isBuy"].toSafeBoolean()
                 ?: data["buy"].toSafeBoolean()
                 ?: rawSideStr.toSafeBoolean()
-            val lots = (data["lots"] ?: data["volume"] ?: data["lotSize"]).toSafeDouble(0.01).coerceAtLeast(0.01)
-            val openPrice = (data["openPrice"] ?: data["entryPrice"] ?: data["price"]).toSafeDouble(1.0).coerceAtLeast(0.00001)
-            val currentPrice = (data["currentPrice"] ?: data["closePrice"] ?: data["marketPrice"]).toSafeDouble(openPrice).coerceAtLeast(0.00001)
-            val sl = (data["sl"] ?: data["stopLoss"]).toSafeNullablePositiveDouble()
-            val tp = (data["tp"] ?: data["takeProfit"]).toSafeNullablePositiveDouble()
-            val profit = (data["profit"] ?: data["pnl"] ?: data["floatingPnL"]).toSafeDouble(0.0)
-            val openTime = (data["openTime"] ?: data["entryTime"] ?: data["time"]).toSafeDateTimeString()
+
+            val lots = ((snap.get("lots") as? Number)?.toDouble() ?: (data["lots"] ?: data["volume"] ?: data["lotSize"]).toSafeDouble(0.01))
+                .safeFinite(0.01).coerceAtLeast(0.01)
+            val openPrice = ((snap.get("openPrice") as? Number)?.toDouble() ?: (data["openPrice"] ?: data["entryPrice"] ?: data["price"]).toSafeDouble(1.0))
+                .safeFinite(1.0).coerceAtLeast(0.00001)
+            val currentPrice = ((snap.get("currentPrice") as? Number)?.toDouble() ?: (data["currentPrice"] ?: data["closePrice"] ?: data["marketPrice"]).toSafeDouble(openPrice))
+                .safeFinite(openPrice).coerceAtLeast(0.00001)
+            val sl = ((snap.get("sl") as? Number)?.toDouble() ?: (data["sl"] ?: data["stopLoss"]).toSafeDouble(0.0))
+                .safeFinite(0.0).takeIf { it > 0.0 } ?: pipeSl
+            val tp = ((snap.get("tp") as? Number)?.toDouble() ?: (data["tp"] ?: data["takeProfit"]).toSafeDouble(0.0))
+                .safeFinite(0.0).takeIf { it > 0.0 } ?: pipeTp
+            val profit = ((snap.get("profit") as? Number)?.toDouble() ?: (data["profit"] ?: data["pnl"] ?: data["floatingPnL"]).toSafeDouble(0.0))
+                .safeFinite(0.0)
             val createdAt = data["createdAt"].toSafeTimestamp()
             val updatedAt = data["updatedAt"].toSafeTimestamp()
 
@@ -504,7 +529,7 @@ class CloudTradeRepository(
                 sl = sl,
                 tp = tp,
                 profit = profit,
-                openTime = openTime,
+                openTime = cleanOpenTime,
                 createdAt = createdAt,
                 updatedAt = updatedAt
             )
@@ -527,31 +552,49 @@ class CloudTradeRepository(
             if (!snap.exists()) return null
             val data = snap.data ?: return null
             val docId = snap.id
-            val rawTicket = data["ticketId"] ?: data["ticket"] ?: data["orderId"] ?: data["id"]
+            val extractedTicketStr = snap.getString("ticketId")?.removePrefix("#")?.trim()?.takeIf { it.isNotEmpty() }
+                ?: (snap.get("ticketId") as? Number)?.toLong()?.toString()
+                ?: docId.removePrefix("hist_").substringAfterLast("_").removePrefix("#").trim()
+            val rawTicket = data["ticketId"] ?: data["ticket"] ?: data["orderId"] ?: data["id"] ?: extractedTicketStr
             val ticketLong = resolveUniqueDocDomainId(docId, rawTicket, 200_000L)
-            val explicitTicketStr = when (rawTicket) {
-                is String -> rawTicket.trim().takeIf { it.isNotEmpty() && (it.startsWith("#") || it.all { ch -> ch.isDigit() }) }
-                is Number -> "#${rawTicket.toLong()}"
+            val explicitTicketStr = when {
+                extractedTicketStr.isNotEmpty() && extractedTicketStr.all { it.isDigit() } -> "#$extractedTicketStr"
+                rawTicket is String && rawTicket.trim().isNotEmpty() -> {
+                    val clean = rawTicket.trim().removePrefix("#").trim()
+                    if (clean.all { it.isDigit() }) "#$clean" else null
+                }
+                rawTicket is Number -> "#${rawTicket.toLong()}"
                 else -> null
             }
-            val rawSymbol = (data["symbol"] ?: data["pair"] ?: data["instrument"])?.toString()?.trim().orEmpty()
+            val rawSymbol = (snap.getString("symbol") ?: (data["symbol"] ?: data["pair"] ?: data["instrument"])?.toString())?.trim().orEmpty()
             val rawSideStr = (data["side"] ?: data["type"] ?: data["orderType"] ?: data["direction"] ?: data["action"])?.toString()
-            val rawBuyBool = data["isBuy"].toSafeBoolean()
+            val rawBuyBool = (snap.get("isBuy") as? Boolean)
+                ?: (snap.get("buy") as? Boolean)
+                ?: data["isBuy"].toSafeBoolean()
                 ?: data["buy"].toSafeBoolean()
                 ?: rawSideStr.toSafeBoolean()
-            val lots = (data["lots"] ?: data["volume"] ?: data["lotSize"]).toSafeDouble(0.01).coerceAtLeast(0.01)
-            val openPrice = (data["openPrice"] ?: data["entryPrice"]).toSafeDouble(1.0).coerceAtLeast(0.00001)
-            val closePrice = (data["closePrice"] ?: data["exitPrice"] ?: data["currentPrice"]).toSafeDouble(openPrice).coerceAtLeast(0.00001)
-            val profit = (data["profit"] ?: data["pnl"] ?: data["realizedProfit"]).toSafeDouble(0.0)
+            val lots = ((snap.get("lots") as? Number)?.toDouble() ?: (data["lots"] ?: data["volume"] ?: data["lotSize"]).toSafeDouble(0.01))
+                .safeFinite(0.01).coerceAtLeast(0.01)
+            val openPrice = ((snap.get("openPrice") as? Number)?.toDouble() ?: (data["openPrice"] ?: data["entryPrice"]).toSafeDouble(1.0))
+                .safeFinite(1.0).coerceAtLeast(0.00001)
+            val closePrice = ((snap.get("closePrice") as? Number)?.toDouble() ?: (data["closePrice"] ?: data["exitPrice"] ?: data["currentPrice"]).toSafeDouble(openPrice))
+                .safeFinite(openPrice).coerceAtLeast(0.00001)
+            val profit = ((snap.get("profit") as? Number)?.toDouble() ?: (data["profit"] ?: data["pnl"] ?: data["realizedProfit"]).toSafeDouble(0.0))
+                .safeFinite(0.0)
             val openTime = (data["openTime"] ?: data["entryTime"]).toSafeDateTimeString()
             val closeTime = (data["closeTime"] ?: data["exitTime"] ?: data["time"]).toSafeDateTimeString()
                 .ifBlank { openTime.substringBefore("|") }
-            val commission = (data["commission"] ?: data["comm"]).toSafeDouble(0.0)
-            val swap = (data["swap"] ?: data["rollover"]).toSafeDouble(0.0)
-            val explicitSl = (data["sl"] ?: data["stopLoss"]).toSafeNullablePositiveDouble()
-            val explicitTp = (data["tp"] ?: data["takeProfit"]).toSafeNullablePositiveDouble()
+            val commission = ((snap.get("commission") as? Number)?.toDouble() ?: (data["commission"] ?: data["comm"]).toSafeDouble(0.0))
+                .safeFinite(0.0)
+            val swap = ((snap.get("swap") as? Number)?.toDouble() ?: (data["swap"] ?: data["rollover"]).toSafeDouble(0.0))
+                .safeFinite(0.0)
+            val explicitSl = ((snap.get("sl") as? Number)?.toDouble() ?: (data["sl"] ?: data["stopLoss"]).toSafeDouble(0.0))
+                .safeFinite(0.0).takeIf { it > 0.0 }
+            val explicitTp = ((snap.get("tp") as? Number)?.toDouble() ?: (data["tp"] ?: data["takeProfit"]).toSafeDouble(0.0))
+                .safeFinite(0.0).takeIf { it > 0.0 }
             val explicitHitCode = (data["hitOutcome"] ?: data["hit"] ?: data["closeReason"])?.toString()
-            val explicitIsWithdrawal = (data["isWithdrawal"] ?: data["withdrawal"]).toSafeBoolean()
+            val explicitIsWithdrawal = (snap.get("isWithdrawal") as? Boolean)
+                ?: (data["isWithdrawal"] ?: data["withdrawal"]).toSafeBoolean()
                 ?: (rawSideStr?.trim()?.equals("WITHDRAWAL", ignoreCase = true) == true)
             val explicitComment = (data["comment"] ?: data["note"] ?: data["description"])?.toString()?.trim()
             val createdAt = data["createdAt"].toSafeTimestamp()
@@ -599,11 +642,11 @@ class CloudTradeRepository(
             val data = snap.data ?: return null
             val docId = (data["key"] as? String)?.trim()?.takeIf { it.isNotEmpty() }
                 ?: snap.id.ifBlank { "main" }
-            val balance = (data["balance"]).toSafeDouble(524.74)
-            val deposit = (data["deposit"] ?: data["initialDeposit"] ?: data["baseDeposit"]).toSafeDouble(500.00)
-            val realizedProfit = (data["realizedProfit"] ?: data["profit"]).toSafeDouble(24.74)
-            val totalSwap = (data["totalSwap"] ?: data["swap"]).toSafeDouble(0.0)
-            val totalCommission = (data["totalCommission"] ?: data["commission"]).toSafeDouble(0.0)
+            val balance = ((snap.get("balance") as? Number)?.toDouble() ?: (data["balance"]).toSafeDouble(524.74)).safeFinite(524.74)
+            val deposit = ((snap.get("deposit") as? Number)?.toDouble() ?: (data["deposit"] ?: data["initialDeposit"] ?: data["baseDeposit"]).toSafeDouble(500.00)).safeFinite(500.00)
+            val realizedProfit = ((snap.get("realizedProfit") as? Number)?.toDouble() ?: (data["realizedProfit"] ?: data["profit"]).toSafeDouble(24.74)).safeFinite(24.74)
+            val totalSwap = ((snap.get("totalSwap") as? Number)?.toDouble() ?: (data["totalSwap"] ?: data["swap"]).toSafeDouble(0.0)).safeFinite(0.0)
+            val totalCommission = ((snap.get("totalCommission") as? Number)?.toDouble() ?: (data["totalCommission"] ?: data["commission"]).toSafeDouble(0.0)).safeFinite(0.0)
             val accountName = (data["accountName"] ?: data["name"])?.toString()?.trim()
                 ?.takeIf { it.isNotEmpty() } ?: "Pasindu Jeewantha Pelanage"
             val brokerName = (data["brokerName"] ?: data["broker"] ?: data["company"])?.toString()?.trim()
@@ -612,7 +655,9 @@ class CloudTradeRepository(
                 ?.takeIf { it.isNotEmpty() } ?: "36054607 - MonetaMarkets-Live"
             val serverName = (data["serverName"] ?: data["server"])?.toString()?.trim()
                 ?.takeIf { it.isNotEmpty() } ?: "AS08, Hedge"
-            val isReal = data["isReal"].toSafeBoolean()
+            val isReal = (snap.get("isReal") as? Boolean)
+                ?: (snap.get("real") as? Boolean)
+                ?: data["isReal"].toSafeBoolean()
                 ?: data["real"].toSafeBoolean()
                 ?: (data["accountType"]?.toString()?.equals("Demo", ignoreCase = true)?.not())
                 ?: true
@@ -695,7 +740,6 @@ class CloudTradeRepository(
         val path = "users/$userId/positions"
         val registration = try {
             db.collection("users").document(userId).collection("positions")
-                .whereEqualTo("userId", userId)
                 .addSnapshotListener { snapshot, error ->
                     try {
                         if (error != null) {
@@ -726,7 +770,6 @@ class CloudTradeRepository(
         val path = "users/$userId/history"
         val registration = try {
             db.collection("users").document(userId).collection("history")
-                .whereEqualTo("userId", userId)
                 .addSnapshotListener { snapshot, error ->
                     try {
                         if (error != null) {
@@ -757,17 +800,8 @@ class CloudTradeRepository(
         val path = "users/$userId/positions"
         return try {
             val col = db.collection("users").document(userId).collection("positions")
-            val snap = try {
-                col.whereEqualTo("userId", userId).get().await()
-            } catch (e: Exception) {
-                col.get().await()
-            }
-            val docs = if (snap.documents.isNotEmpty()) {
-                snap.documents
-            } else {
-                runCatching { col.get().await().documents }.getOrDefault(emptyList())
-            }
-            mapPositionDocuments(docs, safeKey)
+            val snap = col.get().await()
+            mapPositionDocuments(snap.documents, safeKey)
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -786,17 +820,8 @@ class CloudTradeRepository(
         val path = "users/$userId/history"
         return try {
             val col = db.collection("users").document(userId).collection("history")
-            val snap = try {
-                col.whereEqualTo("userId", userId).get().await()
-            } catch (e: Exception) {
-                col.get().await()
-            }
-            val docs = if (snap.documents.isNotEmpty()) {
-                snap.documents
-            } else {
-                runCatching { col.get().await().documents }.getOrDefault(emptyList())
-            }
-            mapHistoryDocuments(docs, safeKey)
+            val snap = col.get().await()
+            mapHistoryDocuments(snap.documents, safeKey)
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -811,17 +836,8 @@ class CloudTradeRepository(
         val path = "users/$userId/accounts"
         return try {
             val col = db.collection("users").document(userId).collection("accounts")
-            val snap = try {
-                col.whereEqualTo("userId", userId).get().await()
-            } catch (e: Exception) {
-                col.get().await()
-            }
-            val docs = if (snap.documents.isNotEmpty()) {
-                snap.documents
-            } else {
-                runCatching { col.get().await().documents }.getOrDefault(emptyList())
-            }
-            docs.mapNotNull { parseAccountSnapshot(it) }
+            val snap = col.get().await()
+            snap.documents.mapNotNull { parseAccountSnapshot(it) }
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
@@ -868,7 +884,6 @@ class CloudTradeRepository(
         val path = "users/$userId/accounts"
         val registration = try {
             db.collection("users").document(userId).collection("accounts")
-                .whereEqualTo("userId", userId)
                 .addSnapshotListener { snapshot, error ->
                     try {
                         if (error != null) {
@@ -912,12 +927,6 @@ class CloudTradeRepository(
         )
 
         try {
-            val existing = runCatching { docRef.get().await() }.getOrNull()
-            val createdAtValue: Any = if (existing != null && existing.exists()) {
-                existing.data?.get("createdAt").toSafeTimestamp() ?: FieldValue.serverTimestamp()
-            } else {
-                FieldValue.serverTimestamp()
-            }
             val payload = mutableMapOf<String, Any>(
                 "userId" to userId,
                 "ticketId" to position.id.coerceAtLeast(1L),
@@ -927,14 +936,13 @@ class CloudTradeRepository(
                 "openPrice" to safeOpenPrice,
                 "currentPrice" to safeCurrentPrice,
                 "profit" to safeProfit,
-                "openTime" to position.openTime.ifBlank { SriLankaMarketHours.formatDateTime() }.take(64),
-                "createdAt" to createdAtValue,
+                "openTime" to position.openTime.substringBefore("|").ifBlank { SriLankaMarketHours.formatDateTime() }.take(64),
+                "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
             position.sl?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }?.let { payload["sl"] = it }
             position.tp?.takeIf { !it.isNaN() && !it.isInfinite() && it > 0.0 }?.let { payload["tp"] = it }
 
-            // Atomic create or in-place update without deleting first (prevents transient delete snapshots)
             docRef.set(payload).await()
             return docId
         } catch (e: CancellationException) {
@@ -975,14 +983,27 @@ class CloudTradeRepository(
         userId: String = requireUserId(),
         accountKey: String = "main"
     ) {
-        val docId = positionDocId(positionId, accountKey)
-        val docRef = db.collection("users").document(userId).collection("positions").document(docId)
+        val safeKey = accountKey.ifBlank { "main" }
+        val cleanTicketId = positionId.toString().removePrefix("#").trim()
+        val colRef = db.collection("users").document(userId).collection("positions")
+        val candidateIds = linkedSetOf(
+            cleanTicketId,
+            "pos_$cleanTicketId",
+            positionDocId(positionId, safeKey)
+        )
+        if (positionId in 1L..99_999_999L) {
+            val mt5Ticket = (385000000L + positionId).toString()
+            candidateIds.add(mt5Ticket)
+            candidateIds.add("pos_$mt5Ticket")
+        }
         try {
-            docRef.delete().await()
+            for (docId in candidateIds) {
+                runCatching { colRef.document(docId).delete().await() }
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            runCatching { handleFirestoreError(e, OperationType.DELETE, docRef.path) }
+            runCatching { handleFirestoreError(e, OperationType.DELETE, "${colRef.path}/$cleanTicketId") }
         }
     }
 
@@ -1025,7 +1046,7 @@ class CloudTradeRepository(
                 tp = trade.tp
             )
             encodedSymbol = trade.symbol.ifBlank { "XAUUSD" }.take(32)
-            val baseOpen = trade.openTime.ifBlank { safeCloseTime }.take(24)
+            val baseOpen = trade.openTime.substringBefore("|").ifBlank { safeCloseTime }.take(24)
             val slStr = formatCompactDouble(trade.sl)
             val tpStr = formatCompactDouble(trade.tp)
             val ticketStr = trade.ticketId.take(18)
@@ -1074,14 +1095,7 @@ class CloudTradeRepository(
         val docId = historyDocId(trade.id, docSuffix, accountKey)
         val docRef = db.collection("users").document(userId).collection("history").document(docId)
         try {
-            val existing = runCatching { docRef.get().await() }.getOrNull()
-            val createdAtValue: Any = if (existing != null && existing.exists()) {
-                existing.data?.get("createdAt").toSafeTimestamp() ?: FieldValue.serverTimestamp()
-            } else {
-                FieldValue.serverTimestamp()
-            }
-            val payload = buildHistoryPayload(trade, userId, createdAtValue)
-            // Atomic create or in-place update without deleting first (prevents transient delete snapshots)
+            val payload = buildHistoryPayload(trade, userId, FieldValue.serverTimestamp())
             docRef.set(payload).await()
             return docId
         } catch (e: CancellationException) {
@@ -1098,24 +1112,34 @@ class CloudTradeRepository(
         accountKey: String = "main"
     ) {
         val safeKey = accountKey.ifBlank { "main" }
+        val cleanTicketId = tradeId.toString().removePrefix("#").trim()
         val colRef = db.collection("users").document(userId).collection("history")
-        val primaryDocRef = colRef.document(historyDocId(tradeId, "", safeKey))
+        val candidateIds = linkedSetOf(
+            cleanTicketId,
+            "hist_$cleanTicketId",
+            historyDocId(tradeId, "", safeKey)
+        )
+        if (tradeId in 1L..99_999_999L) {
+            val mt5Ticket = (385000000L + tradeId).toString()
+            candidateIds.add(mt5Ticket)
+            candidateIds.add("hist_$mt5Ticket")
+        }
         try {
-            primaryDocRef.delete().await()
-            val matchingDocs = colRef
-                .whereEqualTo("userId", userId)
-                .whereEqualTo("ticketId", tradeId)
-                .get()
-                .await()
-            for (doc in matchingDocs.documents) {
+            for (docId in candidateIds) {
+                runCatching { colRef.document(docId).delete().await() }
+            }
+            val matchingDocs = runCatching {
+                colRef.whereEqualTo("ticketId", tradeId).get().await().documents
+            }.getOrDefault(emptyList())
+            for (doc in matchingDocs) {
                 if (isDocForAccount(doc.id, "hist", safeKey, doc.data)) {
-                    doc.reference.delete().await()
+                    runCatching { doc.reference.delete().await() }
                 }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            runCatching { handleFirestoreError(e, OperationType.DELETE, primaryDocRef.path) }
+            runCatching { handleFirestoreError(e, OperationType.DELETE, "${colRef.path}/$cleanTicketId") }
         }
     }
 
@@ -1145,12 +1169,6 @@ class CloudTradeRepository(
         val encodedServerName = "$cleanServer|$cleanDepositDate|$cleanLogoType".take(128)
 
         try {
-            val existing = runCatching { docRef.get().await() }.getOrNull()
-            val createdAtValue: Any = if (existing != null && existing.exists()) {
-                existing.data?.get("createdAt").toSafeTimestamp() ?: FieldValue.serverTimestamp()
-            } else {
-                FieldValue.serverTimestamp()
-            }
             val payload = mapOf(
                 "userId" to userId,
                 "balance" to account.balance.safeFinite(0.0),
@@ -1163,7 +1181,7 @@ class CloudTradeRepository(
                 "accountId" to account.accountId.ifBlank { "36054607 - MonetaMarkets-Live" }.take(128),
                 "serverName" to encodedServerName,
                 "isReal" to account.isReal,
-                "createdAt" to createdAtValue,
+                "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
             docRef.set(payload).await()
@@ -1197,7 +1215,7 @@ class CloudTradeRepository(
     ) {
         val colRef = db.collection("users").document(userId).collection("positions")
         try {
-            val snap = colRef.whereEqualTo("userId", userId).get().await()
+            val snap = colRef.get().await()
             for (doc in snap.documents) {
                 if (accountKey == null || isDocForAccount(doc.id, "pos", accountKey, doc.data)) {
                     doc.reference.delete().await()
@@ -1216,7 +1234,7 @@ class CloudTradeRepository(
     ) {
         val colRef = db.collection("users").document(userId).collection("history")
         try {
-            val snap = colRef.whereEqualTo("userId", userId).get().await()
+            val snap = colRef.get().await()
             for (doc in snap.documents) {
                 if (accountKey == null || isDocForAccount(doc.id, "hist", accountKey, doc.data)) {
                     doc.reference.delete().await()
