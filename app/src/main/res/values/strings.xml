@@ -1,3 +1,12 @@
 <resources>
     <string name="app_name">MetaTrader 5</string>
+    <string name="auth_sign_in_heading">Sign in to your account</string>
+    <string name="auth_sign_in_subtitle">Use your Google account to sync your balance, open trades, and history across Android and iOS.</string>
+    <string name="auth_continue_with_google">Continue with Google</string>
+    <string name="auth_signing_in">Signing in…</string>
+    <string name="auth_dismiss_error">Dismiss error</string>
+    <string name="auth_sign_out">Sign Out</string>
+    <string name="auth_default_trader_name">Trader</string>
+    <string name="auth_profile_avatar_desc">Google profile photo</string>
+    <string name="auth_google_logo_desc">Google logo</string>
 </resources>

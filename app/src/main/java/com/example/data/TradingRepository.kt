@@ -236,134 +236,8 @@ class TradingRepository(private val scope: CoroutineScope) {
     private val _quotes = MutableStateFlow(initialQuotes)
     val quotes: StateFlow<List<SymbolQuote>> = _quotes.asStateFlow()
 
-    // Start with no open trades; only trades explicitly opened by the user are active
-    private val initialPositions = emptyList<TradePosition>()
-
-    private val _positions = MutableStateFlow(initialPositions)
+    private val _positions = MutableStateFlow<List<TradePosition>>(emptyList())
     val positions: StateFlow<List<TradePosition>> = _positions.asStateFlow()
-
-    // Initial historical trades (editable & deletable from About -> Trade History Control)
-    private val initialHistory = listOf(
-        HistoryTrade(
-            id = 9001L,
-            symbol = "NAS100",
-            isBuy = false,
-            lots = 0.01,
-            openPrice = 27548.11,
-            closePrice = 27471.52,
-            profit = 15.32,
-            openTime = "2026.07.28 17:11:04",
-            closeTime = "2026.07.28 17:14:53",
-            commission = 0.00,
-            swap = 0.00,
-            sl = 27625.57,
-            tp = 27395.47,
-            ticketId = "#385193325",
-            hitOutcome = TradeHitOutcome.NONE
-        ),
-        HistoryTrade(
-            id = 9002L,
-            symbol = "NAS100",
-            isBuy = false,
-            lots = 0.01,
-            openPrice = 27493.22,
-            closePrice = 27482.51,
-            profit = 2.14,
-            openTime = "2026.07.28 17:15:17",
-            closeTime = "2026.07.28 17:15:37",
-            commission = 0.00,
-            swap = 0.00,
-            sl = null,
-            tp = 27483.18,
-            ticketId = "#385195553",
-            hitOutcome = TradeHitOutcome.TP_HIT
-        ),
-        HistoryTrade(
-            id = 9003L,
-            symbol = "NAS100",
-            isBuy = true,
-            lots = 0.01,
-            openPrice = 27729.94,
-            closePrice = 27692.72,
-            profit = -7.44,
-            openTime = "2026.07.29 16:41:08",
-            closeTime = "2026.07.29 16:47:14",
-            commission = 0.00,
-            swap = 0.00,
-            sl = 27692.72,
-            tp = 27810.00,
-            ticketId = "#385341892",
-            hitOutcome = TradeHitOutcome.SL_HIT
-        ),
-        HistoryTrade(
-            id = 9004L,
-            symbol = "NAS100",
-            isBuy = true,
-            lots = 0.01,
-            openPrice = 28105.58,
-            closePrice = 28187.63,
-            profit = 16.41,
-            openTime = "2026.07.31 17:48:12",
-            closeTime = "2026.07.31 17:56:44",
-            commission = 0.00,
-            swap = 0.00,
-            sl = 28020.00,
-            tp = 28200.00,
-            ticketId = "#385619044",
-            hitOutcome = TradeHitOutcome.NONE
-        ),
-        HistoryTrade(
-            id = 9005L,
-            symbol = "NAS100",
-            isBuy = true,
-            lots = 0.01,
-            openPrice = 29884.47,
-            closePrice = 29881.87,
-            profit = -0.52,
-            openTime = "2026.08.05 17:12:03",
-            closeTime = "2026.08.05 17:15:29",
-            commission = 0.00,
-            swap = 0.00,
-            sl = 29881.87,
-            tp = 29960.00,
-            ticketId = "#386104218",
-            hitOutcome = TradeHitOutcome.SL_HIT
-        ),
-        HistoryTrade(
-            id = 9006L,
-            symbol = "NAS100",
-            isBuy = true,
-            lots = 0.01,
-            openPrice = 29617.99,
-            closePrice = 29670.14,
-            profit = 10.43,
-            openTime = "2026.08.07 16:39:45",
-            closeTime = "2026.08.07 16:51:22",
-            commission = 0.00,
-            swap = 0.00,
-            sl = 29550.00,
-            tp = 29700.00,
-            ticketId = "#386419830",
-            hitOutcome = TradeHitOutcome.NONE
-        ),
-        HistoryTrade(
-            id = 9007L,
-            symbol = "NAS100",
-            isBuy = true,
-            lots = 0.01,
-            openPrice = 29821.56,
-            closePrice = 29763.58,
-            profit = -11.60,
-            openTime = "2026.08.12 16:44:21",
-            closeTime = "2026.08.12 16:56:39",
-            commission = 0.00,
-            swap = 0.00,
-            sl = 29763.58,
-            tp = 29910.00,
-            ticketId = "#386902115",
-            hitOutcome = TradeHitOutcome.SL_HIT
-        )
-    )
 
     private val _history = MutableStateFlow<List<HistoryTrade>>(emptyList())
     val history: StateFlow<List<HistoryTrade>> = _history.asStateFlow()
@@ -375,22 +249,15 @@ class TradingRepository(private val scope: CoroutineScope) {
     val accounts: StateFlow<List<AccountInfo>> = _accounts.asStateFlow()
 
     private var activeAccountKey: String = ""
-    private val positionsByAccount = java.util.concurrent.ConcurrentHashMap<String, List<TradePosition>>()
-    private val historyByAccount = java.util.concurrent.ConcurrentHashMap<String, List<HistoryTrade>>()
-    private val deletedPositionIdsByAccount = java.util.concurrent.ConcurrentHashMap<String, MutableSet<Long>>()
-    private val deletedHistoryIdsByAccount = java.util.concurrent.ConcurrentHashMap<String, MutableSet<Long>>()
-    private val recentlyModifiedPositionMs = java.util.concurrent.ConcurrentHashMap<Long, Long>()
-    private val recentlyModifiedHistoryMs = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+    @Volatile
+    private var cloudAuthoritativeBalance: Double = CloudUserAccount.DEFAULT_BALANCE
+    @Volatile
+    private var cloudLeverage: Double = LEVERAGE
+    private val openTradeDocIdById = java.util.concurrent.ConcurrentHashMap<Long, String>()
+    private val historyDocIdById = java.util.concurrent.ConcurrentHashMap<Long, String>()
 
-    private fun deletedPositionIds(accountKey: String = activeAccountKey): MutableSet<Long> =
-        deletedPositionIdsByAccount.getOrPut(accountKey.ifBlank { "main" }) {
-            java.util.concurrent.ConcurrentHashMap.newKeySet()
-        }
-
-    private fun deletedHistoryIds(accountKey: String = activeAccountKey): MutableSet<Long> =
-        deletedHistoryIdsByAccount.getOrPut(accountKey.ifBlank { "main" }) {
-            java.util.concurrent.ConcurrentHashMap.newKeySet()
-        }
+    private val _isAuthInitialized = MutableStateFlow(false)
+    val isAuthInitialized: StateFlow<Boolean> = _isAuthInitialized.asStateFlow()
 
     private val _isCloudSynced = MutableStateFlow(false)
     val isCloudSynced: StateFlow<Boolean> = _isCloudSynced.asStateFlow()
@@ -398,10 +265,17 @@ class TradingRepository(private val scope: CoroutineScope) {
     private val _currentUserEmail = MutableStateFlow<String?>(null)
     val currentUserEmail: StateFlow<String?> = _currentUserEmail.asStateFlow()
 
+    private val _currentUserDisplayName = MutableStateFlow<String?>(null)
+    val currentUserDisplayName: StateFlow<String?> = _currentUserDisplayName.asStateFlow()
+
+    private val _currentUserPhotoUrl = MutableStateFlow<String?>(null)
+    val currentUserPhotoUrl: StateFlow<String?> = _currentUserPhotoUrl.asStateFlow()
+
     private var localStorage: LocalTradeStorage? = null
     private var cloudRepository: CloudTradeRepository? = null
     private var firebaseAuth: FirebaseAuth? = null
     private var authStateListener: FirebaseAuth.AuthStateListener? = null
+    private var cloudBootstrapJob: Job? = null
     private var cloudPositionsJob: Job? = null
     private var cloudHistoryJob: Job? = null
     private var cloudAccountJob: Job? = null
@@ -1844,6 +1718,10 @@ class TradingRepository(private val scope: CoroutineScope) {
         return String.format(Locale.US, "%s:%02d", minuteLabel, finalSec)
     }
 
+    /**
+     * Recalculates floating P&L, equity, margin, free margin, and margin level strictly locally
+     * in memory from live market quotes. NEVER writes ticks or floating P&L to Firestore.
+     */
     private fun recalculatePositionsAndAccount(currentQuotes: List<SymbolQuote>) {
         if (!_isCloudSynced.value || activeAccountKey.isBlank() || _accounts.value.isEmpty()) {
             return
@@ -1853,6 +1731,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val nowTimeStr = synchronized(dateTimeFormat) {
             dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis()))
         }
+        val leverageRatio = (LEVERAGE / cloudLeverage.coerceAtLeast(1.0))
 
         var totalFloatingPnL = 0.0
         var totalOpenSwap = 0.0
@@ -1861,16 +1740,25 @@ class TradingRepository(private val scope: CoroutineScope) {
 
         val updatedPositions = _positions.value.map { pos ->
             val quote = quoteMap[pos.symbol]
-            val openComm = calculateCommissionUsd(pos.symbol, pos.lots, isOpenOnly = true, account = currentAccount)
-            val openSwap = calculateSwapUsd(pos.symbol, pos.isBuy, pos.lots, pos.openTime, nowTimeStr, account = currentAccount)
+            val openComm = if (pos.commission != 0.0) {
+                pos.commission
+            } else {
+                calculateCommissionUsd(pos.symbol, pos.lots, isOpenOnly = true, account = currentAccount)
+            }
+            val openSwap = if (pos.swap != 0.0) {
+                pos.swap
+            } else {
+                calculateSwapUsd(pos.symbol, pos.isBuy, pos.lots, pos.openTime, nowTimeStr, account = currentAccount)
+            }
             totalOpenSwap += openSwap
             totalOpenCommission += openComm
+
+            val positionMargin = calculatePositionMarginUsd(pos, quoteMap) * leverageRatio
+            totalMargin += positionMargin
 
             if (quote != null) {
                 val currentPrice = if (pos.isBuy) quote.bid else quote.ask
                 val profit = calculatePositionProfitUsd(pos, currentPrice, quoteMap)
-                val positionMargin = calculatePositionMarginUsd(pos, quoteMap)
-                totalMargin += positionMargin
                 totalFloatingPnL += profit
 
                 pos.copy(
@@ -1880,8 +1768,6 @@ class TradingRepository(private val scope: CoroutineScope) {
                     swap = openSwap
                 )
             } else {
-                val positionMargin = calculatePositionMarginUsd(pos, quoteMap)
-                totalMargin += positionMargin
                 totalFloatingPnL += pos.profit
                 pos.copy(
                     commission = openComm,
@@ -1892,7 +1778,6 @@ class TradingRepository(private val scope: CoroutineScope) {
 
         _positions.value = updatedPositions
 
-        val deposit = currentAccount.deposit.coerceAtLeast(0.0)
         val currentHistory = _history.value
         val closedTrades = currentHistory.filter { !it.isWithdrawal }
         val totalRealizedProfit = roundTo2(closedTrades.sumOf { it.profit })
@@ -1901,7 +1786,9 @@ class TradingRepository(private val scope: CoroutineScope) {
         val totalWithdrawals = roundTo2(
             currentHistory.filter { it.isWithdrawal }.sumOf { abs(it.profit) }
         )
-        val balance = roundTo2(deposit + totalRealizedProfit + totalSwap + totalCommission - totalWithdrawals)
+        // Balance comes directly from Firestore users/{uid}.balance
+        val balance = roundTo2(cloudAuthoritativeBalance)
+        val deposit = currentAccount.deposit.coerceAtLeast(0.0)
         val roundedFloating = roundTo2(totalFloatingPnL)
         val roundedMargin = roundTo2(totalMargin)
         val equity = roundTo2(balance + roundedFloating + totalOpenSwap + totalOpenCommission)
@@ -1923,33 +1810,7 @@ class TradingRepository(private val scope: CoroutineScope) {
             totalCommission = totalCommission
         )
         _account.value = updatedActiveAccount
-        positionsByAccount[activeAccountKey] = updatedPositions
-        historyByAccount[activeAccountKey] = currentHistory
-
-        _accounts.update { list ->
-            if (list.any { it.key == activeAccountKey }) {
-                list.map { if (it.key == activeAccountKey) updatedActiveAccount else it }
-            } else {
-                listOf(updatedActiveAccount) + list
-            }
-        }
-    }
-
-    private fun persistActiveAccountLocal() {
-        if (!_isCloudSynced.value || activeAccountKey.isBlank() || _accounts.value.isEmpty()) {
-            return
-        }
-        val local = localStorage ?: return
-        val key = activeAccountKey.ifBlank { "main" }
-        positionsByAccount[key] = _positions.value
-        historyByAccount[key] = _history.value
-        local.savePositionsForAccount(key, _positions.value)
-        local.saveHistoryForAccount(key, _history.value)
-        local.saveDeletedPositionIdsForAccount(key, deletedPositionIds(key))
-        local.saveDeletedHistoryIdsForAccount(key, deletedHistoryIds(key))
-        local.saveAccount(_account.value)
-        local.saveAccountsList(_accounts.value)
-        local.saveActiveAccountKey(key)
+        _accounts.value = listOf(updatedActiveAccount)
     }
 
     /**
@@ -2118,104 +1979,31 @@ class TradingRepository(private val scope: CoroutineScope) {
 
     private var nextPositionId = 1001L
 
+    /**
+     * Immediately unsubscribes all active Firestore listeners and clears in-memory
+     * account, open trade, and history state. Called before sign-out and on every auth state change.
+     */
+    @Synchronized
+    fun prepareForSignOut() {
+        clearLoggedOutState()
+    }
+
     @Synchronized
     private fun clearLoggedOutState() {
         stopCloudListeners()
         _currentUserEmail.value = null
+        _currentUserDisplayName.value = null
+        _currentUserPhotoUrl.value = null
         _isCloudSynced.value = false
         activeAccountKey = ""
-        positionsByAccount.clear()
-        historyByAccount.clear()
+        cloudAuthoritativeBalance = CloudUserAccount.DEFAULT_BALANCE
+        cloudLeverage = LEVERAGE
+        openTradeDocIdById.clear()
+        historyDocIdById.clear()
         _accounts.value = emptyList()
         _account.value = EMPTY_LOGGED_OUT_ACCOUNT
         _positions.value = emptyList()
         _history.value = emptyList()
-    }
-
-    /**
-     * Hydrates any locally cached accounts and trades for the signed-in Google user before merging with Cloud.
-     * Never seeds fake demo trades or creates a default account before checking Firestore Cloud first.
-     */
-    @Synchronized
-    private fun hydrateLocalCacheForSignedInUser() {
-        val local = localStorage ?: return
-        val savedAccounts = local.loadAccountsList()
-        val savedActiveKey = local.loadActiveAccountKey()
-        val demoSeedIds = initialHistory.map { it.id }.toSet()
-
-        // Mark built-in demo seed IDs (9001..9007) as deleted so fake demo trades never appear in the user's account
-        local.setSeededDefaultHistory(true)
-        deletedPositionIds("main").clear()
-        local.saveDeletedPositionIdsForAccount("main", emptySet())
-        deletedHistoryIds("main").clear()
-        deletedHistoryIds("main").addAll(demoSeedIds)
-        local.saveDeletedHistoryIdsForAccount("main", deletedHistoryIds("main"))
-
-        if (savedAccounts.isEmpty()) {
-            // Fresh install or no local accounts yet: wait for Cloud accounts in startCloudListeners
-            activeAccountKey = savedActiveKey.ifBlank { "main" }
-            nextPositionId = max(local.loadNextPositionId(), 1001L)
-            return
-        }
-
-        val hydratedAccounts = savedAccounts.map { acc ->
-            val accKey = acc.key.ifBlank { "main" }
-            if (accKey != "main") {
-                deletedPositionIds(accKey).clear()
-                deletedHistoryIds(accKey).clear()
-                local.saveDeletedPositionIdsForAccount(accKey, emptySet())
-                local.saveDeletedHistoryIdsForAccount(accKey, emptySet())
-            }
-            val accPos = local.loadPositionsForAccount(accKey)
-                .map { repairExistingPosition(it) }
-                .also {
-                    positionsByAccount[accKey] = it
-                    local.savePositionsForAccount(accKey, it)
-                }
-            val rawHist = local.loadHistoryForAccount(accKey)
-                .filter { it.id !in demoSeedIds }
-            val accHist = sortHistoryChronologically(rawHist).also {
-                historyByAccount[accKey] = it
-                local.saveHistoryForAccount(accKey, it)
-            }
-            val closedList = accHist.filter { !it.isWithdrawal }
-            val realized = roundTo2(closedList.sumOf { it.profit })
-            val totSwap = roundTo2(closedList.sumOf {
-                if (it.swap != 0.0) it.swap else calculateSwapUsd(it.symbol, it.isBuy, it.lots, it.openTime, it.closeTime, acc)
-            })
-            val totComm = roundTo2(closedList.sumOf {
-                if (it.commission != 0.0) it.commission else calculateCommissionUsd(it.symbol, it.lots, isOpenOnly = false, account = acc)
-            })
-            val withdrawals = roundTo2(accHist.filter { it.isWithdrawal }.sumOf { abs(it.profit) })
-            val dep = acc.deposit.coerceAtLeast(0.0)
-            val bal = roundTo2(dep + realized + totSwap + totComm - withdrawals)
-            acc.copy(
-                key = accKey,
-                deposit = dep,
-                realizedProfit = realized,
-                totalWithdrawal = withdrawals,
-                totalSwap = totSwap,
-                totalCommission = totComm,
-                balance = bal,
-                equity = bal + accPos.sumOf { it.profit + it.swap + it.commission },
-                freeMargin = bal + accPos.sumOf { it.profit + it.swap + it.commission }
-            )
-        }
-
-        val resolvedActive = hydratedAccounts.find { it.key == savedActiveKey } ?: hydratedAccounts.first()
-        activeAccountKey = resolvedActive.key.ifBlank { "main" }
-        _accounts.value = hydratedAccounts
-        _account.value = resolvedActive
-        _positions.value = positionsByAccount[activeAccountKey].orEmpty()
-        _history.value = historyByAccount[activeAccountKey].orEmpty()
-
-        val maxLocalId = max(
-            positionsByAccount.values.flatten().maxOfOrNull { it.id } ?: 1000L,
-            historyByAccount.values.flatten().maxOfOrNull { it.id } ?: 9007L
-        )
-        nextPositionId = max(local.loadNextPositionId(), maxLocalId + 1L)
-        recalculatePositionsAndAccount(_quotes.value)
-        persistActiveAccountLocal()
     }
 
     fun initializeStorage(context: Context) {
@@ -2229,10 +2017,10 @@ class TradingRepository(private val scope: CoroutineScope) {
         _showChartGrid.value = local.loadChartGridEnabled()
         _showSymbolDescription.value = local.loadChartSymbolDescriptionEnabled()
 
-        // Always start in logged-out state until Firebase Auth confirms an active Google session
+        // Always start cleanly logged-out with zero locally stored account/trade state
         clearLoggedOutState()
 
-        // Restore persisted real chart candles for the active symbol immediately so Chart & Quotes run smoothly
+        // Restore chart candle cache for the active symbol
         Timeframe.values().forEach { tf ->
             val savedCandles = filterCandlesToChartNow(local.loadCandles(currentActiveSymbol, tf.name), tf)
             if (savedCandles.isNotEmpty()) {
@@ -2249,8 +2037,7 @@ class TradingRepository(private val scope: CoroutineScope) {
             load14DayHistoricalCandles(currentActiveSymbol, currentActiveTimeframe)
         }
 
-        // Attach Firebase Auth & Firestore Cloud Server sync off the main UI thread.
-        // Accounts, positions, and history ONLY load when a Google account is signed in.
+        // Initialize Firebase Auth & Cloud Firestore off the main UI thread
         scope.launch(Dispatchers.IO) {
             try {
                 if (FirebaseApp.getApps(appContext).isEmpty()) {
@@ -2265,24 +2052,42 @@ class TradingRepository(private val scope: CoroutineScope) {
                     val listener = FirebaseAuth.AuthStateListener { fbAuth ->
                         try {
                             val user = fbAuth.currentUser
-                            if (user != null) {
-                                _currentUserEmail.value = user.email ?: user.displayName ?: "Cloud Account"
-                                _isCloudSynced.value = true
-                                if (_accounts.value.isEmpty()) {
-                                    hydrateLocalCacheForSignedInUser()
-                                }
-                                startCloudListeners(user.uid, cloud)
-                            } else {
+                            // Step 1: Always unsubscribe previous Firestore listeners first
+                            stopCloudListeners()
+
+                            if (user == null || user.uid.isBlank()) {
+                                // Step 2: Logged out -> clear account, open trades, and history state
                                 clearLoggedOutState()
+                            } else {
+                                // Step 3: Logged in -> ensure users/{uid} exists & attach fresh real-time listeners
+                                val uid = user.uid
+                                val email = user.email?.trim().orEmpty()
+                                val displayName = user.displayName?.trim()?.ifBlank { "Trader" } ?: "Trader"
+                                val photoUrl = user.photoUrl?.toString()?.trim().orEmpty()
+                                _currentUserEmail.value = email.ifBlank { null }
+                                _currentUserDisplayName.value = displayName
+                                _currentUserPhotoUrl.value = photoUrl.ifBlank { null }
+                                _isCloudSynced.value = true
+                                activeAccountKey = "main"
+                                openTradeDocIdById.clear()
+                                historyDocIdById.clear()
+                                _positions.value = emptyList()
+                                _history.value = emptyList()
+
+                                startCloudListeners(uid, email, displayName, photoUrl, cloud)
                             }
-                        } catch (ignored: Throwable) {
+                            _isAuthInitialized.value = true
+                        } catch (_: Throwable) {
+                            _isAuthInitialized.value = true
                         }
                     }
                     authStateListener = listener
                     auth.addAuthStateListener(listener)
+                } else {
+                    _isAuthInitialized.value = true
                 }
-            } catch (t: Throwable) {
-                // Keep logged-out state if Firebase is unavailable
+            } catch (_: Throwable) {
+                _isAuthInitialized.value = true
             }
         }
     }
@@ -2290,239 +2095,128 @@ class TradingRepository(private val scope: CoroutineScope) {
     @Volatile
     private var activeListenerUid: String? = null
 
-    @Volatile
-    private var activeListenerAccKey: String? = null
-
-    @Volatile
-    private var lastListenerStartMs: Long = 0L
-
     @Synchronized
-    private fun startCloudListeners(uid: String, cloud: CloudTradeRepository, forceRestart: Boolean = false) {
-        val targetAccKey = activeAccountKey.ifBlank { "main" }
-        activeAccountKey = targetAccKey
-        val now = System.currentTimeMillis()
-        val jobsAlive = cloudPositionsJob?.isActive == true &&
-            cloudHistoryJob?.isActive == true &&
-            cloudAccountJob?.isActive == true
-        if (!forceRestart &&
-            jobsAlive &&
-            activeListenerUid == uid &&
-            activeListenerAccKey == targetAccKey &&
-            now - lastListenerStartMs < 2_500L
-        ) {
-            return
-        }
+    private fun startCloudListeners(
+        uid: String,
+        email: String?,
+        displayName: String?,
+        photoUrl: String?,
+        cloud: CloudTradeRepository
+    ) {
+        val safeUid = uid.trim()
+        if (safeUid.isEmpty()) return
 
         stopCloudListeners()
-        activeListenerUid = uid
-        activeListenerAccKey = targetAccKey
-        lastListenerStartMs = now
+        activeListenerUid = safeUid
 
-        cloudPositionsJob = scope.launch(Dispatchers.IO) {
+        cloudBootstrapJob = scope.launch(Dispatchers.IO) {
             try {
-                cloud.observeOpenPositions(uid, targetAccKey)
-                    .catch { /* Handled by handleFirestoreError */ }
-                    .collect { serverPositions ->
-                        try {
-                            if (activeAccountKey == targetAccKey) {
-                                val delSet = deletedPositionIds(targetAccKey)
-                                val validServer = serverPositions
-                                    .filter { it.id !in delSet }
-                                    .map { repairExistingPosition(it) }
-                                    .distinctBy { it.id }
-                                val currentLocal = _positions.value
-                                    .filter { it.id !in delSet }
-                                    .map { repairExistingPosition(it) }
-                                    .distinctBy { it.id }
+                // Ensure users/{uid} exists (default 10000 USD, leverage 500) & sync displayName/photoURL
+                cloud.ensureUserDocumentExists(
+                    uid = safeUid,
+                    email = email,
+                    displayName = displayName,
+                    photoURL = photoUrl
+                )
 
-                                val mergedMap = LinkedHashMap<Long, TradePosition>()
-                                val nowMs = System.currentTimeMillis()
-                                for (sPos in validServer) {
-                                    val localPos = currentLocal.find { it.id == sPos.id }
-                                    val recentlyEdited = nowMs - (recentlyModifiedPositionMs[sPos.id] ?: 0L) < 8_000L
-                                    mergedMap[sPos.id] = if (localPos != null && recentlyEdited) localPos else sPos
-                                }
+                // Guard against auth change during bootstrap
+                if (activeListenerUid != safeUid || firebaseAuth?.currentUser?.uid != safeUid) {
+                    return@launch
+                }
 
-                                // Only retain local positions not yet in snapshot if they were created/edited in the last 8s
-                                for (lPos in currentLocal) {
-                                    val recentlyEdited = nowMs - (recentlyModifiedPositionMs[lPos.id] ?: 0L) < 8_000L
-                                    if (!mergedMap.containsKey(lPos.id) && recentlyEdited) {
-                                        mergedMap[lPos.id] = lPos
-                                    }
-                                }
-
-                                val mergedPositions = mergedMap.values.distinctBy { it.id }
-                                _positions.value = mergedPositions
-                                val maxId = mergedPositions.maxOfOrNull { it.id } ?: 1000L
-                                if (maxId >= nextPositionId) {
-                                    nextPositionId = maxId + 1L
-                                    localStorage?.saveNextPositionId(nextPositionId)
-                                }
-                                recalculatePositionsAndAccount(_quotes.value)
-                                persistActiveAccountLocal()
-                            }
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (ignored: Throwable) {
+                // 1. Real-time listener on users/{uid}
+                cloudAccountJob = scope.launch(Dispatchers.IO) {
+                    cloud.observeUserAccount(safeUid)
+                        .catch { error ->
+                            val firestoreError = generateSequence(error) { it.cause }
+                                .filterIsInstance<com.google.firebase.firestore.FirebaseFirestoreException>()
+                                .firstOrNull()
+                            if (firestoreError == null && error is kotlinx.coroutines.CancellationException) throw error
                         }
-                    }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (ignored: Throwable) {
-            }
-        }
-
-        cloudHistoryJob = scope.launch(Dispatchers.IO) {
-            try {
-                cloud.observeTradeHistory(uid, targetAccKey)
-                    .catch { /* Handled by handleFirestoreError */ }
-                    .collect { serverHistory ->
-                        try {
-                            if (activeAccountKey == targetAccKey) {
-                                val currentDelSet = deletedHistoryIds(targetAccKey)
-                                val validServer = serverHistory
-                                    .filter { it.id !in currentDelSet }
-                                    .map { repairExistingHistoryTrade(it) }
-                                    .distinctBy { it.id }
-                                val currentLocal = _history.value
-                                    .filter { it.id !in currentDelSet }
-                                    .map { repairExistingHistoryTrade(it) }
-                                    .distinctBy { it.id }
-
-                                val mergedMap = LinkedHashMap<Long, HistoryTrade>()
-                                val nowMs = System.currentTimeMillis()
-                                for (sTrade in validServer) {
-                                    val localTrade = currentLocal.find { it.id == sTrade.id }
-                                    val recentlyEdited = nowMs - (recentlyModifiedHistoryMs[sTrade.id] ?: 0L) < 8_000L
-                                    mergedMap[sTrade.id] = if (localTrade != null && recentlyEdited) {
-                                        mergeTradeRecordsPreservingMetadata(localTrade, sTrade)
-                                    } else {
-                                        mergeTradeRecordsPreservingMetadata(sTrade, localTrade)
-                                    }
+                        .collect { cloudAcc ->
+                            if (activeListenerUid != safeUid) return@collect
+                            if (cloudAcc != null) {
+                                if (cloudAcc.email.isNotBlank()) {
+                                    _currentUserEmail.value = cloudAcc.email
                                 }
-
-                                // Only retain local history deals not yet in snapshot if they were created/edited in the last 8s
-                                for (lTrade in currentLocal) {
-                                    val recentlyEdited = nowMs - (recentlyModifiedHistoryMs[lTrade.id] ?: 0L) < 8_000L
-                                    if (!mergedMap.containsKey(lTrade.id) && recentlyEdited) {
-                                        mergedMap[lTrade.id] = repairExistingHistoryTrade(lTrade)
-                                    }
+                                if (cloudAcc.displayName.isNotBlank()) {
+                                    _currentUserDisplayName.value = cloudAcc.displayName
                                 }
-
-                                val sortedMergedHistory = sortHistoryChronologically(mergedMap.values.toList())
-                                _history.value = sortedMergedHistory
-                                val maxId = sortedMergedHistory.maxOfOrNull { it.id } ?: 1000L
-                                if (maxId >= nextPositionId) {
-                                    nextPositionId = maxId + 1L
-                                    localStorage?.saveNextPositionId(nextPositionId)
+                                if (cloudAcc.photoURL.isNotBlank()) {
+                                    _currentUserPhotoUrl.value = cloudAcc.photoURL
                                 }
-                                recalculatePositionsAndAccount(_quotes.value)
-                                persistActiveAccountLocal()
-                                refreshSymbolCandlesWithTrades(currentActiveSymbol)
-                            }
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (ignored: Throwable) {
-                        }
-                    }
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (ignored: Throwable) {
-            }
-        }
-
-        cloudAccountJob = scope.launch(Dispatchers.IO) {
-            try {
-                cloud.observeAllAccountDocs(uid)
-                    .catch { /* Handled by handleFirestoreError */ }
-                    .collect { accountDocs ->
-                        try {
-                            if (accountDocs.isEmpty()) {
-                                if (_accounts.value.isEmpty()) {
-                                    val defaultMain = AccountInfo(key = "main")
-                                    activeAccountKey = "main"
-                                    _accounts.value = listOf(defaultMain)
-                                    _account.value = defaultMain
-                                    recalculatePositionsAndAccount(_quotes.value)
-                                    persistActiveAccountLocal()
-                                }
-                                return@collect
-                            }
-
-                            val cloudKeys = accountDocs.map { it.id.ifBlank { "main" } }.toSet()
-                            val currentAccounts = _accounts.value.toMutableList()
-                            var accountsListUpdated = false
-                            for (doc in accountDocs) {
-                                val docKey = doc.id.ifBlank { "main" }
-                                val existingIdx = currentAccounts.indexOfFirst { it.key == docKey }
-                                if (existingIdx < 0) {
-                                    val restoredAcc = doc.toDomain().copy(
-                                        key = docKey,
-                                        deposit = doc.deposit.coerceAtLeast(0.0)
-                                    )
-                                    currentAccounts.add(restoredAcc)
-                                    accountsListUpdated = true
-                                } else if (docKey != activeAccountKey) {
-                                    val existingAcc = currentAccounts[existingIdx]
-                                    val mergedOther = doc.toDomain(
-                                        equity = existingAcc.equity,
-                                        margin = existingAcc.margin,
-                                        freeMargin = existingAcc.freeMargin,
-                                        marginLevel = existingAcc.marginLevel,
-                                        floatingPnL = existingAcc.floatingPnL
-                                    ).copy(
-                                        key = docKey,
-                                        deposit = doc.deposit.coerceAtLeast(0.0)
-                                    )
-                                    if (mergedOther != existingAcc) {
-                                        currentAccounts[existingIdx] = mergedOther
-                                        accountsListUpdated = true
-                                    }
-                                }
-                            }
-                            if (accountsListUpdated) {
-                                _accounts.value = currentAccounts.distinctBy { it.key }
-                            }
-
-                            val activeDoc = accountDocs.find { it.id.ifBlank { "main" } == targetAccKey }
-                            if (activeDoc != null && activeAccountKey == targetAccKey) {
+                                cloudAuthoritativeBalance = cloudAcc.balance
+                                cloudLeverage = cloudAcc.leverage.toDouble().coerceAtLeast(1.0)
                                 val current = _account.value
-                                val domainAcc = activeDoc.toDomain(
+                                val domainAccount = cloudAcc.toDomain(
                                     equity = current.equity,
                                     margin = current.margin,
                                     freeMargin = current.freeMargin,
                                     marginLevel = current.marginLevel,
                                     floatingPnL = current.floatingPnL
                                 )
-                                val merged = domainAcc.copy(
-                                    key = targetAccKey,
-                                    deposit = domainAcc.deposit.coerceAtLeast(0.0),
-                                    logoType = domainAcc.logoType.ifBlank { current.logoType },
-                                    depositDate = domainAcc.depositDate.ifBlank { current.depositDate }
-                                )
-                                _account.value = merged
+                                activeAccountKey = "main"
+                                _account.value = domainAccount
+                                _accounts.value = listOf(domainAccount)
                                 recalculatePositionsAndAccount(_quotes.value)
-                                persistActiveAccountLocal()
-                            } else if (activeAccountKey !in cloudKeys && currentAccounts.isNotEmpty()) {
-                                val resolvedActive = currentAccounts.find { it.key == "main" } ?: currentAccounts.first()
-                                val nextKey = resolvedActive.key.ifBlank { "main" }
-                                if (nextKey != targetAccKey) {
-                                    activeAccountKey = nextKey
-                                    _account.value = resolvedActive
-                                    recalculatePositionsAndAccount(_quotes.value)
-                                    persistActiveAccountLocal()
-                                    startCloudListeners(uid, cloud, forceRestart = true)
-                                    return@collect
-                                }
                             }
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (ignored: Throwable) {
                         }
-                    }
+                }
+
+                // 2. Real-time listener on users/{uid}/open_trades (ordered by openTime DESC)
+                cloudPositionsJob = scope.launch(Dispatchers.IO) {
+                    cloud.observeOpenTrades(safeUid)
+                        .catch { error ->
+                            val firestoreError = generateSequence(error) { it.cause }
+                                .filterIsInstance<com.google.firebase.firestore.FirebaseFirestoreException>()
+                                .firstOrNull()
+                            if (firestoreError == null && error is kotlinx.coroutines.CancellationException) throw error
+                        }
+                        .collect { records ->
+                            if (activeListenerUid != safeUid) return@collect
+                            openTradeDocIdById.clear()
+                            val positions = records.map { rec ->
+                                openTradeDocIdById[rec.position.id] = rec.docId
+                                rec.position
+                            }.distinctBy { it.id }
+
+                            _positions.value = positions
+                            val maxId = positions.maxOfOrNull { it.id } ?: 1000L
+                            if (maxId >= nextPositionId) {
+                                nextPositionId = maxId + 1L
+                            }
+                            recalculatePositionsAndAccount(_quotes.value)
+                        }
+                }
+
+                // 3. Real-time listener on users/{uid}/trade_history (ordered by closeTime DESC)
+                cloudHistoryJob = scope.launch(Dispatchers.IO) {
+                    cloud.observeTradeHistory(safeUid)
+                        .catch { error ->
+                            val firestoreError = generateSequence(error) { it.cause }
+                                .filterIsInstance<com.google.firebase.firestore.FirebaseFirestoreException>()
+                                .firstOrNull()
+                            if (firestoreError == null && error is kotlinx.coroutines.CancellationException) throw error
+                        }
+                        .collect { records ->
+                            if (activeListenerUid != safeUid) return@collect
+                            historyDocIdById.clear()
+                            val trades = records.map { rec ->
+                                historyDocIdById[rec.trade.id] = rec.docId
+                                rec.trade
+                            }.distinctBy { it.id }
+
+                            _history.value = sortHistoryChronologically(trades)
+                            val maxId = trades.maxOfOrNull { it.id } ?: 1000L
+                            if (maxId >= nextPositionId) {
+                                nextPositionId = maxId + 1L
+                            }
+                            recalculatePositionsAndAccount(_quotes.value)
+                        }
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
-            } catch (ignored: Throwable) {
+            } catch (_: Throwable) {
             }
         }
     }
@@ -2530,19 +2224,27 @@ class TradingRepository(private val scope: CoroutineScope) {
     @Synchronized
     private fun stopCloudListeners() {
         activeListenerUid = null
-        activeListenerAccKey = null
+        cloudBootstrapJob?.cancel()
         cloudPositionsJob?.cancel()
         cloudHistoryJob?.cancel()
         cloudAccountJob?.cancel()
+        cloudBootstrapJob = null
         cloudPositionsJob = null
         cloudHistoryJob = null
         cloudAccountJob = null
     }
 
     fun syncNowWithServer() {
-        val uid = firebaseAuth?.currentUser?.uid ?: return
+        val user = firebaseAuth?.currentUser ?: return
         val cloud = cloudRepository ?: return
-        startCloudListeners(uid, cloud, forceRestart = false)
+        if (user.uid.isBlank()) return
+        startCloudListeners(
+            uid = user.uid,
+            email = user.email,
+            displayName = user.displayName,
+            photoUrl = user.photoUrl?.toString(),
+            cloud = cloud
+        )
     }
 
     private val issuedTicketNumbers = java.util.concurrent.ConcurrentHashMap.newKeySet<Long>()
@@ -2578,7 +2280,6 @@ class TradingRepository(private val scope: CoroutineScope) {
         issuedTicketNumbers.add(ticketSequenceCursor)
         if (nextPositionId <= ticketSequenceCursor) {
             nextPositionId = ticketSequenceCursor + 1L
-            localStorage?.saveNextPositionId(nextPositionId)
         }
         return ticketSequenceCursor
     }
@@ -2590,7 +2291,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         return "#${generateUniqueTicketNumber()}"
     }
 
-    // Trade execution functions
+    // Trade execution functions — writes ONLY to users/{uid}/open_trades
     fun executeOrder(symbol: String, isBuy: Boolean, lots: Double, sl: Double? = null, tp: Double? = null): TradePosition {
         if (!_isCloudSynced.value || _accounts.value.isEmpty()) {
             return TradePosition(
@@ -2625,182 +2326,94 @@ class TradingRepository(private val scope: CoroutineScope) {
             swap = 0.0
         )
 
-        val accKey = activeAccountKey
-        deletedPositionIds(accKey).remove(newId)
-        recentlyModifiedPositionMs[newId] = System.currentTimeMillis()
-
-        _positions.update { listOf(newPos) + it }
-        recalculatePositionsAndAccount(_quotes.value)
-        refreshSymbolCandlesWithTrades(symbol)
-        persistActiveAccountLocal()
-
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
-        val savedPos = _positions.value.find { it.id == newId } ?: newPos
-        val updatedAccount = _account.value
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    cloud.saveOpenPosition(savedPos, uid, accKey)
-                    cloud.saveOrUpdateAccount(updatedAccount, uid, accKey)
-                } catch (ignored: Exception) {
+                cloud.openTrade(newPos, uid).onSuccess { docId ->
+                    openTradeDocIdById[newId] = docId
                 }
             }
         }
-        return savedPos
+        return newPos
     }
 
+    /**
+     * Atomically closes a position via Firestore runTransaction():
+     * verifies open trade exists, deletes from open_trades, saves to trade_history
+     * with netProfit = grossProfit - commission + swap, and updates users/{uid} balance.
+     */
     fun closePosition(positionId: Long) {
         val pos = _positions.value.find { it.id == positionId } ?: return
+        val docId = openTradeDocIdById[positionId] ?: return
         val quoteMap = _quotes.value.associateBy { it.symbol }
         val quote = quoteMap[pos.symbol]
         val closePrice = if (quote != null) (if (pos.isBuy) quote.bid else quote.ask) else pos.currentPrice
         val exactProfit = calculatePositionProfitUsd(pos, closePrice, quoteMap)
         val rawCloseTime = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
-        val closeTimeFormatted = randomizeCloseTimeSecond(
-            openTimeStr = pos.openTime,
-            closeTimeStr = rawCloseTime,
-            excludeTradeId = pos.id,
-            forceNewRandomSecond = true
-        )
-        val formattedTicket = "#${if (pos.id >= 100000000L) pos.id else 385000000L + pos.id}"
         val roundTurnCommission = calculateCommissionUsd(pos.symbol, pos.lots, isOpenOnly = false)
-        val rolloverSwap = calculateSwapUsd(pos.symbol, pos.isBuy, pos.lots, pos.openTime, closeTimeFormatted)
-
-        val closedTrade = HistoryTrade(
-            id = pos.id,
-            symbol = pos.symbol,
-            isBuy = pos.isBuy,
-            lots = pos.lots,
-            openPrice = pos.openPrice,
-            closePrice = closePrice,
-            profit = exactProfit,
-            openTime = pos.openTime,
-            closeTime = closeTimeFormatted,
-            commission = roundTurnCommission,
-            swap = rolloverSwap,
-            sl = pos.sl,
-            tp = pos.tp,
-            ticketId = formattedTicket
-        )
-
-        val accKey = activeAccountKey
-        deletedPositionIds(accKey).add(positionId)
-        deletedHistoryIds(accKey).remove(closedTrade.id)
-        recentlyModifiedHistoryMs[closedTrade.id] = System.currentTimeMillis()
-
-        _positions.update { it.filter { p -> p.id != positionId } }
-        _history.update { sortHistoryChronologically(it.filter { h -> h.id != closedTrade.id } + closedTrade) }
-
-        recalculatePositionsAndAccount(_quotes.value)
-        refreshSymbolCandlesWithTrades(pos.symbol)
-        persistActiveAccountLocal()
+        val rolloverSwap = calculateSwapUsd(pos.symbol, pos.isBuy, pos.lots, pos.openTime, rawCloseTime)
+        val outcome = inferHitOutcomeFromPrices(pos.symbol, pos.isBuy, pos.openPrice, closePrice, pos.sl, pos.tp)
 
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
-        val updatedAccount = _account.value
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    cloud.deleteOpenPosition(positionId, uid, accKey)
-                    cloud.addHistoryTrade(closedTrade, userId = uid, accountKey = accKey)
-                    cloud.saveOrUpdateAccount(updatedAccount, uid, accKey)
-                } catch (ignored: Exception) {
-                }
-            }
-        }
-    }
-
-    fun closePositionPartial(positionId: Long, closeLots: Double) {
-        val pos = _positions.value.find { it.id == positionId } ?: return
-        val quoteMap = _quotes.value.associateBy { it.symbol }
-        val quote = quoteMap[pos.symbol]
-        val closePrice = if (quote != null) (if (pos.isBuy) quote.bid else quote.ask) else pos.currentPrice
-        val remainingLots = roundTo2(pos.lots - closeLots)
-        val closedPartPos = pos.copy(lots = closeLots)
-        val proportionalProfit = calculatePositionProfitUsd(closedPartPos, closePrice, quoteMap)
-        val rawCloseTime = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
-        val closeTimeFormatted = randomizeCloseTimeSecond(
-            openTimeStr = pos.openTime,
-            closeTimeStr = rawCloseTime,
-            excludeTradeId = pos.id,
-            forceNewRandomSecond = true
-        )
-        val closedHistoryId = if (remainingLots <= 0.005) pos.id else generateUniqueTicketNumber()
-        val formattedTicket = "#${if (closedHistoryId >= 100000000L) closedHistoryId else 385000000L + closedHistoryId}"
-        val partialCommission = calculateCommissionUsd(pos.symbol, closeLots, isOpenOnly = false)
-        val partialSwap = calculateSwapUsd(pos.symbol, pos.isBuy, closeLots, pos.openTime, closeTimeFormatted)
-
-        val closedTrade = HistoryTrade(
-            id = closedHistoryId,
-            symbol = pos.symbol,
-            isBuy = pos.isBuy,
-            lots = closeLots,
-            openPrice = pos.openPrice,
-            closePrice = closePrice,
-            profit = proportionalProfit,
-            openTime = pos.openTime,
-            closeTime = closeTimeFormatted,
-            commission = partialCommission,
-            swap = partialSwap,
-            sl = pos.sl,
-            tp = pos.tp,
-            ticketId = formattedTicket
-        )
-
-        val accKey = activeAccountKey
-        deletedHistoryIds(accKey).remove(closedTrade.id)
-        recentlyModifiedHistoryMs[closedTrade.id] = System.currentTimeMillis()
-
-        _history.update { sortHistoryChronologically(it.filter { h -> h.id != closedTrade.id } + closedTrade) }
-
-        if (remainingLots <= 0.005) {
-            deletedPositionIds(accKey).add(positionId)
-            _positions.update { it.filter { p -> p.id != positionId } }
-        } else {
-            recentlyModifiedPositionMs[positionId] = System.currentTimeMillis()
-            _positions.update { list ->
-                list.map {
-                    if (it.id == positionId) {
-                        it.copy(lots = remainingLots)
-                    } else it
-                }
-            }
-        }
-
-        recalculatePositionsAndAccount(_quotes.value)
-        refreshSymbolCandlesWithTrades(pos.symbol)
-        persistActiveAccountLocal()
-
-        val uid = firebaseAuth?.currentUser?.uid
-        val cloud = cloudRepository
-        val updatedAccount = _account.value
-        if (uid != null && cloud != null) {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    if (remainingLots <= 0.005) {
-                        cloud.deleteOpenPosition(positionId, uid, accKey)
-                    } else {
-                        val updatedPos = _positions.value.find { it.id == positionId }
-                        cloud.updateOpenPositionPartial(
-                            positionId = positionId,
-                            newLots = remainingLots,
-                            currentPrice = closePrice,
-                            newProfit = updatedPos?.profit ?: 0.0,
-                            userId = uid,
-                            accountKey = accKey
-                        )
-                    }
-                    cloud.addHistoryTrade(closedTrade, userId = uid, accountKey = accKey)
-                    cloud.saveOrUpdateAccount(updatedAccount, uid, accKey)
-                } catch (ignored: Exception) {
-                }
+                cloud.closeTradeTransaction(
+                    openTradeDocId = docId,
+                    closePrice = closePrice,
+                    grossProfit = exactProfit,
+                    commission = roundTurnCommission,
+                    swap = rolloverSwap,
+                    closeLots = null,
+                    ticketId = pos.id,
+                    hitOutcome = outcome,
+                    explicitUid = uid
+                )
             }
         }
     }
 
     /**
-     * Calculates exact USD profit for a closed historical trade using 1:500 contract math.
+     * Atomically closes part (or all) of an open position via Firestore runTransaction().
+     */
+    fun closePositionPartial(positionId: Long, closeLots: Double) {
+        val pos = _positions.value.find { it.id == positionId } ?: return
+        val docId = openTradeDocIdById[positionId] ?: return
+        val quoteMap = _quotes.value.associateBy { it.symbol }
+        val quote = quoteMap[pos.symbol]
+        val closePrice = if (quote != null) (if (pos.isBuy) quote.bid else quote.ask) else pos.currentPrice
+        val safeCloseLots = roundTo2(closeLots.coerceIn(0.01, pos.lots))
+        val remainingLots = roundTo2(pos.lots - safeCloseLots)
+        val closedPartPos = pos.copy(lots = safeCloseLots)
+        val proportionalProfit = calculatePositionProfitUsd(closedPartPos, closePrice, quoteMap)
+        val rawCloseTime = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
+        val partialCommission = calculateCommissionUsd(pos.symbol, safeCloseLots, isOpenOnly = false)
+        val partialSwap = calculateSwapUsd(pos.symbol, pos.isBuy, safeCloseLots, pos.openTime, rawCloseTime)
+        val closedTicketId = if (remainingLots <= 0.005) pos.id else generateUniqueTicketNumber()
+        val outcome = inferHitOutcomeFromPrices(pos.symbol, pos.isBuy, pos.openPrice, closePrice, pos.sl, pos.tp)
+
+        val uid = firebaseAuth?.currentUser?.uid
+        val cloud = cloudRepository
+        if (uid != null && cloud != null) {
+            scope.launch(Dispatchers.IO) {
+                cloud.closeTradeTransaction(
+                    openTradeDocId = docId,
+                    closePrice = closePrice,
+                    grossProfit = proportionalProfit,
+                    commission = partialCommission,
+                    swap = partialSwap,
+                    closeLots = if (remainingLots <= 0.005) null else safeCloseLots,
+                    ticketId = closedTicketId,
+                    hitOutcome = outcome,
+                    explicitUid = uid
+                )
+            }
+        }
+    }
+
+    /**
+     * Calculates exact USD profit for a closed historical trade using contract math.
      */
     fun calculateHistoricalTradeProfit(
         symbol: String,
@@ -2823,9 +2436,7 @@ class TradingRepository(private val scope: CoroutineScope) {
     }
 
     /**
-     * Adds or updates a running open position (trade without a close time) from the About control tab.
-     * If the trade was previously a closed HistoryTrade (`existingId` present in `_history`), it is
-     * moved from `_history` into active `_positions` and synced to the Cloud Trade Server.
+     * Opens a new running trade or modifies SL/TP/details on an existing open trade in `users/{uid}/open_trades`.
      */
     fun saveOrUpdateRunningPosition(
         existingId: Long? = null,
@@ -2856,20 +2467,6 @@ class TradingRepository(private val scope: CoroutineScope) {
             else -> generateUniqueTicketNumber()
         }
 
-        val prevOpenTime = existingId?.let { id ->
-            _positions.value.find { it.id == id }?.openTime
-                ?: _history.value.find { it.id == id }?.openTime
-        }
-        val shouldForceRandomOpenSec = prevOpenTime == null ||
-            rawOpenTime == prevOpenTime ||
-            rawOpenTime.take(16) != prevOpenTime.take(16)
-        val cleanOpenTime = randomizeOpenTimeSecond(
-            openTimeStr = rawOpenTime,
-            closeTimeStr = null,
-            excludeTradeId = targetId,
-            forceNewRandomSecond = shouldForceRandomOpenSec
-        )
-
         val quote = _quotes.value.find { it.symbol.equals(cleanSymbol, ignoreCase = true) }
         val liveClosePrice = if (quote != null) {
             if (isBuy) quote.bid else quote.ask
@@ -2877,15 +2474,7 @@ class TradingRepository(private val scope: CoroutineScope) {
             openPrice
         }
 
-        val accKey = activeAccountKey
-        val wasInHistory = existingId != null && _history.value.any { it.id == existingId }
-        if (wasInHistory && existingId != null) {
-            deletedHistoryIds(accKey).add(existingId)
-            _history.update { list -> list.filter { it.id != existingId } }
-        }
-        deletedPositionIds(accKey).remove(targetId)
-        recentlyModifiedPositionMs[targetId] = System.currentTimeMillis()
-
+        val openComm = calculateCommissionUsd(cleanSymbol, safeLots, isOpenOnly = true)
         val runningPos = TradePosition(
             id = targetId,
             symbol = cleanSymbol,
@@ -2896,73 +2485,94 @@ class TradingRepository(private val scope: CoroutineScope) {
             sl = sl?.takeIf { it > 0.0 },
             tp = tp?.takeIf { it > 0.0 },
             profit = 0.0,
-            openTime = cleanOpenTime
+            openTime = rawOpenTime,
+            commission = openComm,
+            swap = 0.0
         )
 
-        _positions.update { currentList ->
-            if (currentList.any { it.id == targetId }) {
-                currentList.map { if (it.id == targetId) runningPos else it }
-            } else {
-                listOf(runningPos) + currentList
-            }
-        }
-
-        recalculatePositionsAndAccount(_quotes.value)
-        refreshSymbolCandlesWithTrades(cleanSymbol)
-        persistActiveAccountLocal()
-
-        val savedPosition = _positions.value.find { it.id == targetId } ?: runningPos
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
-        val updatedAccount = _account.value
+        val existingOpenDocId = existingId?.let { openTradeDocIdById[it] }
+        val existingHistoryDocId = existingId?.let { historyDocIdById[it] }
+
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    if (wasInHistory && existingId != null) {
-                        cloud.deleteHistoryTrade(existingId, uid, accKey)
+                if (existingOpenDocId != null) {
+                    cloud.updateOpenTrade(
+                        docId = existingOpenDocId,
+                        symbol = cleanSymbol,
+                        isBuy = isBuy,
+                        lots = safeLots,
+                        openPrice = openPrice,
+                        sl = sl?.takeIf { it > 0.0 } ?: 0.0,
+                        tp = tp?.takeIf { it > 0.0 } ?: 0.0,
+                        commission = openComm,
+                        swap = 0.0,
+                        explicitUid = uid
+                    )
+                } else {
+                    if (existingHistoryDocId != null) {
+                        val remainingHistory = _history.value.filter { it.id != existingId }
+                        val stats = computeAccountStatsFromHistory(remainingHistory, _account.value.deposit)
+                        cloud.deleteHistoryDealAndBalance(
+                            dealDocId = existingHistoryDocId,
+                            updatedBalance = stats.balance,
+                            updatedRealizedProfit = stats.realizedProfit,
+                            updatedTotalWithdrawal = stats.totalWithdrawal,
+                            updatedTotalSwap = stats.totalSwap,
+                            updatedTotalCommission = stats.totalCommission,
+                            explicitUid = uid
+                        )
                     }
-                    cloud.saveOpenPosition(savedPosition, uid, accKey)
-                    cloud.saveOrUpdateAccount(updatedAccount, uid, accKey)
-                } catch (ignored: Exception) {
+                    cloud.openTrade(runningPos, uid).onSuccess { docId ->
+                        openTradeDocIdById[targetId] = docId
+                    }
                 }
             }
         }
-        return savedPosition
+        return runningPos
     }
 
     /**
-     * Deletes an open running position without saving it to closed history, and syncs with Cloud.
+     * Deletes an open running position directly from `users/{uid}/open_trades`.
      */
     fun deleteRunningPosition(positionId: Long) {
-        val accKey = activeAccountKey
-        deletedPositionIds(accKey).add(positionId)
-        recentlyModifiedPositionMs.remove(positionId)
-
-        val removedSym = _positions.value.find { it.id == positionId }?.symbol
-        _positions.update { list -> list.filter { it.id != positionId } }
-        recalculatePositionsAndAccount(_quotes.value)
-        if (removedSym != null) {
-            refreshSymbolCandlesWithTrades(removedSym)
-        }
-        persistActiveAccountLocal()
-
+        val docId = openTradeDocIdById[positionId] ?: return
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
-        val updatedAccount = _account.value
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    cloud.deleteOpenPosition(positionId, uid, accKey)
-                    cloud.saveOrUpdateAccount(updatedAccount, uid, accKey)
-                } catch (ignored: Exception) {
-                }
+                cloud.deleteOpenTrade(docId, uid)
             }
         }
     }
 
+    private data class HistoryStats(
+        val balance: Double,
+        val realizedProfit: Double,
+        val totalWithdrawal: Double,
+        val totalSwap: Double,
+        val totalCommission: Double
+    )
+
+    private fun computeAccountStatsFromHistory(historyList: List<HistoryTrade>, deposit: Double): HistoryStats {
+        val closedTrades = historyList.filter { !it.isWithdrawal }
+        val realized = roundTo2(closedTrades.sumOf { it.profit })
+        val totSwap = roundTo2(closedTrades.sumOf { it.swap })
+        val totComm = roundTo2(closedTrades.sumOf { it.commission })
+        val totWithdrawals = roundTo2(historyList.filter { it.isWithdrawal }.sumOf { abs(it.profit) })
+        val newBalance = roundTo2(deposit.coerceAtLeast(0.0) + realized + totSwap + totComm - totWithdrawals)
+        return HistoryStats(
+            balance = newBalance,
+            realizedProfit = realized,
+            totalWithdrawal = totWithdrawals,
+            totalSwap = totSwap,
+            totalCommission = totComm
+        )
+    }
+
     /**
-     * Adds a new trade or edits an existing trade in the History list, keeps the list sorted by date,
-     * and auto-saves to both Local Storage and the Cloud Trade Server (Firestore).
+     * Adds or updates a closed trade in `users/{uid}/trade_history` and atomically reconciles `users/{uid}` balance.
      */
     fun saveOrUpdateHistoryTrade(
         existingId: Long? = null,
@@ -2983,9 +2593,6 @@ class TradingRepository(private val scope: CoroutineScope) {
     ): HistoryTrade {
         val uniqueTicketNum = if (existingId == null) generateUniqueTicketNumber() else null
         val targetId = existingId ?: uniqueTicketNum ?: nextPositionId++
-        if (existingId == null) {
-            localStorage?.saveNextPositionId(nextPositionId)
-        }
         val rawSymbol = symbol.trim().uppercase(Locale.US).ifBlank { "NAS100" }
         val cleanSymbol = if (rawSymbol == "NDX100") "NAS100" else rawSymbol
         val safeLots = roundTo2(lots.coerceAtLeast(0.01))
@@ -3021,30 +2628,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val candidateTicket = customTicketId?.trim()?.takeIf { it.isNotBlank() }?.let {
             if (it.startsWith("#")) it else "#$it"
         }
-        val ticketTakenByOther = candidateTicket != null && (
-            _history.value.any { it.id != targetId && it.ticketId.equals(candidateTicket, ignoreCase = true) } ||
-                _positions.value.any {
-                    it.id != targetId &&
-                        "#${if (it.id >= 100000000L) it.id else 385000000L + it.id}".equals(candidateTicket, ignoreCase = true)
-                }
-            )
-        val formattedTicket = if (candidateTicket != null && !ticketTakenByOther) {
-            candidateTicket.removePrefix("#").toLongOrNull()?.let { issuedTicketNumbers.add(it) }
-            candidateTicket
-        } else {
-            val freshNum = uniqueTicketNum ?: generateUniqueTicketNumber()
-            "#$freshNum"
-        }
-
-        val accKey = activeAccountKey
-        // If this trade was previously a running open position, remove it from open positions
-        val wasRunningPosition = existingId != null && _positions.value.any { it.id == existingId }
-        if (wasRunningPosition && existingId != null) {
-            deletedPositionIds(accKey).add(existingId)
-            _positions.update { list -> list.filter { it.id != existingId } }
-        }
-        deletedHistoryIds(accKey).remove(targetId)
-        recentlyModifiedHistoryMs[targetId] = System.currentTimeMillis()
+        val formattedTicket = candidateTicket ?: "#$targetId"
 
         val cleanSl = sl?.takeIf { it > 0.0 }
         val cleanTp = tp?.takeIf { it > 0.0 }
@@ -3079,27 +2663,27 @@ class TradingRepository(private val scope: CoroutineScope) {
             hitOutcome = resolvedOutcome
         )
 
-        _history.update { currentList ->
-            val withoutOld = currentList.filter { it.id != targetId }
-            sortHistoryChronologically(withoutOld + tradeRecord)
-        }
-
-        recalculatePositionsAndAccount(_quotes.value)
-        refreshSymbolCandlesWithTrades(cleanSymbol)
-        persistActiveAccountLocal()
+        val nextHistory = sortHistoryChronologically(_history.value.filter { it.id != targetId } + tradeRecord)
+        val stats = computeAccountStatsFromHistory(nextHistory, _account.value.deposit)
+        val existingDocId = existingId?.let { historyDocIdById[it] }
+        val deleteOpenDocId = existingId?.let { openTradeDocIdById[it] }
 
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
-        val updatedAccount = _account.value
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    if (wasRunningPosition && existingId != null) {
-                        cloud.deleteOpenPosition(existingId, uid, accKey)
-                    }
-                    cloud.addHistoryTrade(tradeRecord, userId = uid, accountKey = accKey)
-                    cloud.saveOrUpdateAccount(updatedAccount, uid, accKey)
-                } catch (ignored: Exception) {
+                cloud.saveHistoryDealAndBalance(
+                    trade = tradeRecord,
+                    existingDocId = existingDocId,
+                    updatedBalance = stats.balance,
+                    updatedRealizedProfit = stats.realizedProfit,
+                    updatedTotalWithdrawal = stats.totalWithdrawal,
+                    updatedTotalSwap = stats.totalSwap,
+                    updatedTotalCommission = stats.totalCommission,
+                    deleteOpenDocId = deleteOpenDocId,
+                    explicitUid = uid
+                ).onSuccess { docId ->
+                    historyDocIdById[targetId] = docId
                 }
             }
         }
@@ -3107,8 +2691,7 @@ class TradingRepository(private val scope: CoroutineScope) {
     }
 
     /**
-     * Adds a new Withdrawal or edits an existing Withdrawal in the History list, keeps the list sorted
-     * by date, and auto-saves to both Local Storage and the Cloud Trade Server (Firestore).
+     * Adds or updates a Withdrawal record in `users/{uid}/trade_history` and atomically reconciles `users/{uid}` balance.
      */
     fun saveOrUpdateWithdrawal(
         existingId: Long? = null,
@@ -3119,9 +2702,6 @@ class TradingRepository(private val scope: CoroutineScope) {
     ): HistoryTrade {
         val uniqueTicketNum = if (existingId == null) generateUniqueTicketNumber() else null
         val targetId = existingId ?: uniqueTicketNum ?: nextPositionId++
-        if (existingId == null) {
-            localStorage?.saveNextPositionId(nextPositionId)
-        }
         val cleanAmount = roundTo2(abs(amount).coerceAtLeast(0.01))
         val nowFormatted = synchronized(dateTimeFormat) { dateTimeFormat.format(Date(SriLankaMarketHours.chartNowMillis())) }
         val cleanCloseTime = closeTime.trim().ifBlank { nowFormatted }
@@ -3129,19 +2709,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         val candidateTicket = customTicketId?.trim()?.takeIf { it.isNotBlank() }?.let {
             if (it.startsWith("#")) it else "#$it"
         }
-        val ticketTakenByOther = candidateTicket != null &&
-            _history.value.any { it.id != targetId && it.ticketId.equals(candidateTicket, ignoreCase = true) }
-        val formattedTicket = if (candidateTicket != null && !ticketTakenByOther) {
-            candidateTicket.removePrefix("#").toLongOrNull()?.let { issuedTicketNumbers.add(it) }
-            candidateTicket
-        } else {
-            val freshNum = uniqueTicketNum ?: generateUniqueTicketNumber()
-            "#$freshNum"
-        }
-
-        val accKey = activeAccountKey
-        deletedHistoryIds(accKey).remove(targetId)
-        recentlyModifiedHistoryMs[targetId] = System.currentTimeMillis()
+        val formattedTicket = candidateTicket ?: "#$targetId"
 
         val withdrawalRecord = HistoryTrade(
             id = targetId,
@@ -3162,23 +2730,25 @@ class TradingRepository(private val scope: CoroutineScope) {
             comment = cleanComment
         )
 
-        _history.update { currentList ->
-            val withoutOld = currentList.filter { it.id != targetId }
-            sortHistoryChronologically(withoutOld + withdrawalRecord)
-        }
-
-        recalculatePositionsAndAccount(_quotes.value)
-        persistActiveAccountLocal()
+        val nextHistory = sortHistoryChronologically(_history.value.filter { it.id != targetId } + withdrawalRecord)
+        val stats = computeAccountStatsFromHistory(nextHistory, _account.value.deposit)
+        val existingDocId = existingId?.let { historyDocIdById[it] }
 
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
-        val updatedAccount = _account.value
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    cloud.addHistoryTrade(withdrawalRecord, userId = uid, accountKey = accKey)
-                    cloud.saveOrUpdateAccount(updatedAccount, uid, accKey)
-                } catch (ignored: Exception) {
+                cloud.saveHistoryDealAndBalance(
+                    trade = withdrawalRecord,
+                    existingDocId = existingDocId,
+                    updatedBalance = stats.balance,
+                    updatedRealizedProfit = stats.realizedProfit,
+                    updatedTotalWithdrawal = stats.totalWithdrawal,
+                    updatedTotalSwap = stats.totalSwap,
+                    updatedTotalCommission = stats.totalCommission,
+                    explicitUid = uid
+                ).onSuccess { docId ->
+                    historyDocIdById[targetId] = docId
                 }
             }
         }
@@ -3186,69 +2756,62 @@ class TradingRepository(private val scope: CoroutineScope) {
     }
 
     /**
-     * Deletes a Trade or Withdrawal from the History list and auto-syncs the deletion to the Cloud Server.
+     * Deletes a Trade or Withdrawal from `users/{uid}/trade_history` and atomically reconciles `users/{uid}` balance.
      */
     fun deleteHistoryItem(id: Long) {
-        val accKey = activeAccountKey
-        deletedHistoryIds(accKey).add(id)
-        recentlyModifiedHistoryMs.remove(id)
-
-        val removedSym = _history.value.find { it.id == id && !it.isWithdrawal }?.symbol
-        _history.update { list -> list.filter { it.id != id } }
-        recalculatePositionsAndAccount(_quotes.value)
-        if (removedSym != null) {
-            refreshSymbolCandlesWithTrades(removedSym)
-        }
-        persistActiveAccountLocal()
+        val docId = historyDocIdById[id] ?: return
+        val nextHistory = _history.value.filter { it.id != id }
+        val stats = computeAccountStatsFromHistory(nextHistory, _account.value.deposit)
 
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
-        val updatedAccount = _account.value
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    cloud.deleteHistoryTrade(id, uid, accKey)
-                    cloud.saveOrUpdateAccount(updatedAccount, uid, accKey)
-                } catch (ignored: Exception) {
-                }
+                cloud.deleteHistoryDealAndBalance(
+                    dealDocId = docId,
+                    updatedBalance = stats.balance,
+                    updatedRealizedProfit = stats.realizedProfit,
+                    updatedTotalWithdrawal = stats.totalWithdrawal,
+                    updatedTotalSwap = stats.totalSwap,
+                    updatedTotalCommission = stats.totalCommission,
+                    explicitUid = uid
+                )
             }
         }
     }
 
     fun setDepositAmount(newDeposit: Double, newDepositDate: String? = null) {
         val cleanDeposit = roundTo2(newDeposit.coerceAtLeast(0.0))
-        _account.update { current ->
-            val rawDate = newDepositDate?.trim()?.takeIf { it.isNotBlank() } ?: current.depositDate
-            val updatedDate = if (rawDate.count { it == ':' } < 2 || rawDate.endsWith(":00")) {
-                randomizeOpenTimeSecond(rawDate, null, null, forceNewRandomSecond = true)
-            } else {
-                rawDate
-            }
-            current.copy(
-                deposit = cleanDeposit,
-                depositDate = updatedDate
-            )
+        val current = _account.value
+        val rawDate = newDepositDate?.trim()?.takeIf { it.isNotBlank() } ?: current.depositDate
+        val updatedDate = if (rawDate.count { it == ':' } < 2 || rawDate.endsWith(":00")) {
+            randomizeOpenTimeSecond(rawDate, null, null, forceNewRandomSecond = true)
+        } else {
+            rawDate
         }
-        recalculatePositionsAndAccount(_quotes.value)
-        persistActiveAccountLocal()
+        val stats = computeAccountStatsFromHistory(_history.value, cleanDeposit)
+        val updatedAccount = current.copy(
+            deposit = cleanDeposit,
+            depositDate = updatedDate,
+            balance = stats.balance,
+            realizedProfit = stats.realizedProfit,
+            totalWithdrawal = stats.totalWithdrawal,
+            totalSwap = stats.totalSwap,
+            totalCommission = stats.totalCommission
+        )
 
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
-        val updatedAccount = _account.value
-        val accKey = activeAccountKey
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    cloud.saveOrUpdateAccount(updatedAccount, uid, accKey)
-                } catch (ignored: Exception) {
-                }
+                cloud.updateUserAccount(updatedAccount, uid)
             }
         }
     }
 
     companion object {
         const val LEVERAGE = 500.0
-        const val BASE_HISTORY_PROFIT = 24.74
+        const val BASE_HISTORY_PROFIT = 0.0
 
         val EMPTY_LOGGED_OUT_ACCOUNT = AccountInfo(
             key = "",
@@ -3274,39 +2837,11 @@ class TradingRepository(private val scope: CoroutineScope) {
     }
 
     fun resetDemoAccount() {
-        val resetKey = activeAccountKey
-        deletedPositionIds(resetKey).clear()
-        deletedHistoryIds(resetKey).clear()
-        _account.update {
-            AccountInfo(
-                key = resetKey,
-                accountName = it.accountName,
-                brokerName = it.brokerName,
-                accountId = it.accountId,
-                serverName = it.serverName,
-                isReal = it.isReal,
-                logoType = it.logoType
-            )
-        }
-        _positions.value = initialPositions
-        _history.value = if (resetKey == "main") sortHistoryChronologically(initialHistory) else emptyList()
-        recalculatePositionsAndAccount(_quotes.value)
-        persistActiveAccountLocal()
-
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
-        val freshAccount = _account.value
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    cloud.clearUserPositions(uid, resetKey)
-                    cloud.clearUserHistory(uid, resetKey)
-                    for (hist in _history.value) {
-                        cloud.addHistoryTrade(hist, userId = uid, accountKey = resetKey)
-                    }
-                    cloud.saveOrUpdateAccount(freshAccount, uid, resetKey)
-                } catch (ignored: Exception) {
-                }
+                cloud.resetUserAccount(uid)
             }
         }
     }
@@ -3342,8 +2877,7 @@ class TradingRepository(private val scope: CoroutineScope) {
         newBalance: Double? = null,
         logoType: String? = null
     ) {
-        val safeKey = targetKey.ifBlank { activeAccountKey }
-        val existingAcc = _accounts.value.find { it.key == safeKey } ?: _account.value
+        val existingAcc = _account.value
         val resolvedIsReal = isReal ?: when {
             accountId.contains("Demo", ignoreCase = true) ||
                 accountId.contains("SIM", ignoreCase = true) ||
@@ -3353,74 +2887,42 @@ class TradingRepository(private val scope: CoroutineScope) {
             else -> existingAcc.isReal
         }
 
-        val targetHist = if (safeKey == activeAccountKey) {
-            _history.value
-        } else {
-            historyByAccount[safeKey] ?: localStorage?.loadHistoryForAccount(safeKey).orEmpty()
-        }
-        val previewAccount = existingAcc.copy(
-            brokerName = brokerName.trim().ifBlank { existingAcc.brokerName },
-            accountId = accountId.trim().ifBlank { existingAcc.accountId },
-            logoType = logoType?.takeIf { it.isNotBlank() } ?: existingAcc.logoType
-        )
-        val closedTrades = targetHist.filter { !it.isWithdrawal }
-        val realizedProfit = roundTo2(closedTrades.sumOf { it.profit })
-        val totalSwap = roundTo2(closedTrades.sumOf {
-            if (it.swap != 0.0) it.swap else calculateSwapUsd(it.symbol, it.isBuy, it.lots, it.openTime, it.closeTime, previewAccount)
-        })
-        val totalCommission = roundTo2(closedTrades.sumOf {
-            if (it.commission != 0.0) it.commission else calculateCommissionUsd(it.symbol, it.lots, isOpenOnly = false, account = previewAccount)
-        })
-        val totalWithdrawals = roundTo2(targetHist.filter { it.isWithdrawal }.sumOf { abs(it.profit) })
+        val stats = computeAccountStatsFromHistory(_history.value, existingAcc.deposit)
+        val updatedBalance = newBalance?.let { roundTo2(it) } ?: existingAcc.balance
         val updatedDeposit = if (newBalance != null) {
-            roundTo2((newBalance - realizedProfit - totalSwap - totalCommission + totalWithdrawals).coerceAtLeast(0.0))
+            roundTo2((updatedBalance - stats.realizedProfit - stats.totalSwap - stats.totalCommission + stats.totalWithdrawal).coerceAtLeast(0.0))
         } else {
             existingAcc.deposit.coerceAtLeast(0.0)
         }
-        val updatedBalance = roundTo2(updatedDeposit + realizedProfit + totalSwap + totalCommission - totalWithdrawals)
 
         val updatedAcc = existingAcc.copy(
-            key = safeKey,
+            key = "main",
             accountName = accountName.trim().ifBlank { existingAcc.accountName },
             brokerName = brokerName.trim().ifBlank { existingAcc.brokerName },
             accountId = accountId.trim().ifBlank { existingAcc.accountId },
             serverName = serverName.trim().ifBlank { existingAcc.serverName },
             isReal = resolvedIsReal,
             deposit = updatedDeposit,
-            realizedProfit = realizedProfit,
-            totalWithdrawal = totalWithdrawals,
-            totalSwap = totalSwap,
-            totalCommission = totalCommission,
+            realizedProfit = stats.realizedProfit,
+            totalWithdrawal = stats.totalWithdrawal,
+            totalSwap = stats.totalSwap,
+            totalCommission = stats.totalCommission,
             balance = updatedBalance,
-            equity = updatedBalance + existingAcc.floatingPnL,
-            freeMargin = updatedBalance + existingAcc.floatingPnL - existingAcc.margin,
             logoType = logoType?.takeIf { it.isNotBlank() } ?: existingAcc.logoType
         )
-
-        _accounts.update { list ->
-            list.map { if (it.key == safeKey) updatedAcc else it }
-        }
-
-        if (safeKey == activeAccountKey) {
-            _account.value = updatedAcc
-            recalculatePositionsAndAccount(_quotes.value)
-        }
-        persistActiveAccountLocal()
 
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    cloud.saveOrUpdateAccount(updatedAcc, uid, safeKey)
-                } catch (ignored: Exception) {
-                }
+                cloud.updateUserAccount(updatedAcc, uid)
             }
         }
     }
 
     /**
-     * Creates a new trading account with its own isolated trade history, open positions, and balance.
+     * Unified single-account architecture (`users/{uid}`): updates the authenticated user's profile
+     * and starting balance directly in Firestore so Android & iOS stay 100% synced.
      */
     fun addAccount(
         accountName: String,
@@ -3432,191 +2934,52 @@ class TradingRepository(private val scope: CoroutineScope) {
         logoType: String = "AUTO",
         switchToNew: Boolean = true
     ): AccountInfo {
-        persistActiveAccountLocal()
-
-        val newKey = "acc_${System.currentTimeMillis()}_${(100..999).random()}"
         val cleanBalance = roundTo2(initialBalance.coerceAtLeast(0.0))
-        val newAccount = AccountInfo(
-            key = newKey,
+        val updatedAcc = _account.value.copy(
+            key = "main",
             balance = cleanBalance,
-            equity = cleanBalance,
-            margin = 0.0,
-            freeMargin = cleanBalance,
-            marginLevel = 0.0,
-            floatingPnL = 0.0,
-            accountName = accountName.trim().ifBlank { "Pasindu Jeewantha Pelanage" },
-            brokerName = brokerName.trim().ifBlank { "Moneta Markets (Pty) Ltd" },
-            accountId = accountId.trim().ifBlank {
-                val randNum = (1000000..9999999).random()
-                if (isReal) "$randNum \u2014 MonetaMarkets-Live" else "$randNum \u2014 MonetaMarkets-Demo"
-            },
-            serverName = serverName.trim().ifBlank {
-                if (isReal) "AS08, Hedge" else "AS2 - NY, Hedge"
-            },
-            isReal = isReal,
             deposit = cleanBalance,
-            depositDate = SriLankaMarketHours.formatDateTime(),
-            realizedProfit = 0.0,
-            totalWithdrawal = 0.0,
-            totalSwap = 0.0,
-            totalCommission = 0.0,
+            accountName = accountName.trim().ifBlank { _account.value.accountName.ifBlank { "Trading Account" } },
+            brokerName = brokerName.trim().ifBlank { _account.value.brokerName.ifBlank { "Moneta Markets (Pty) Ltd" } },
+            accountId = accountId.trim().ifBlank { _account.value.accountId },
+            serverName = serverName.trim().ifBlank { _account.value.serverName },
+            isReal = isReal,
             logoType = logoType.ifBlank { "AUTO" }
         )
-
-        positionsByAccount[newKey] = emptyList()
-        historyByAccount[newKey] = emptyList()
-        localStorage?.savePositionsForAccount(newKey, emptyList())
-        localStorage?.saveHistoryForAccount(newKey, emptyList())
-
-        _accounts.update { currentList ->
-            currentList + newAccount
-        }
-
-        if (switchToNew) {
-            switchAccount(newKey)
-        } else {
-            persistActiveAccountLocal()
-        }
-
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    cloud.saveOrUpdateAccount(newAccount, uid, newKey)
-                } catch (ignored: Exception) {
-                }
+                cloud.updateUserAccount(updatedAcc, uid)
             }
         }
-        return newAccount
+        return updatedAcc
     }
 
-    /**
-     * Switches the active trading account to [targetKey], loading that account's own trade history,
-     * running positions, and balance across the entire app.
-     */
     fun switchAccount(targetKey: String) {
-        val safeKey = targetKey.trim()
-        if (safeKey.isEmpty()) return
-        val targetAcc = _accounts.value.find { it.key == safeKey } ?: return
-        if (safeKey == activeAccountKey && _account.value.key == safeKey) return
-
-        // Save outgoing account's state first
-        persistActiveAccountLocal()
-
-        activeAccountKey = safeKey
-        val nextPositions = positionsByAccount[safeKey]
-            ?: localStorage?.loadPositionsForAccount(safeKey).orEmpty()
-        val nextHistory = historyByAccount[safeKey]
-            ?: sortHistoryChronologically(localStorage?.loadHistoryForAccount(safeKey).orEmpty())
-
-        positionsByAccount[safeKey] = nextPositions
-        historyByAccount[safeKey] = nextHistory
-
-        _account.value = targetAcc
-        _positions.value = nextPositions
-        _history.value = sortHistoryChronologically(nextHistory)
-
-        recalculatePositionsAndAccount(_quotes.value)
-        persistActiveAccountLocal()
-        refreshSymbolCandlesWithTrades(currentActiveSymbol)
-
-        val uid = firebaseAuth?.currentUser?.uid
-        val cloud = cloudRepository
-        if (uid != null && cloud != null) {
-            startCloudListeners(uid, cloud)
-        }
+        // Unified single-user account under users/{uid}
+        syncNowWithServer()
     }
 
-    /**
-     * Deletes the account with [targetKey] along with its trade history and open positions.
-     * If the deleted account was active, switches to the first remaining account.
-     */
     fun deleteAccount(targetKey: String): Boolean {
-        val safeKey = targetKey.trim()
-        val currentList = _accounts.value
-        if (currentList.none { it.key == safeKey }) return false
-
-        positionsByAccount.remove(safeKey)
-        historyByAccount.remove(safeKey)
-        localStorage?.deleteAccountStorage(safeKey)
-
-        val remaining = currentList.filter { it.key != safeKey }
-        if (remaining.isEmpty()) {
-            val fallback = AccountInfo(
-                key = "main",
-                balance = 0.0,
-                equity = 0.0,
-                freeMargin = 0.0,
-                deposit = 0.0,
-                realizedProfit = 0.0,
-                totalWithdrawal = 0.0
-            )
-            activeAccountKey = "main"
-            positionsByAccount["main"] = emptyList()
-            historyByAccount["main"] = emptyList()
-            _accounts.value = listOf(fallback)
-            _account.value = fallback
-            _positions.value = emptyList()
-            _history.value = emptyList()
-            recalculatePositionsAndAccount(_quotes.value)
-            persistActiveAccountLocal()
-        } else {
-            _accounts.value = remaining
-            if (safeKey == activeAccountKey) {
-                val nextActive = remaining.first()
-                activeAccountKey = nextActive.key
-                val nextPos = positionsByAccount[activeAccountKey]
-                    ?: localStorage?.loadPositionsForAccount(activeAccountKey).orEmpty()
-                val nextHist = historyByAccount[activeAccountKey]
-                    ?: sortHistoryChronologically(localStorage?.loadHistoryForAccount(activeAccountKey).orEmpty())
-                _account.value = nextActive
-                _positions.value = nextPos
-                _history.value = nextHist
-                recalculatePositionsAndAccount(_quotes.value)
-            }
-            persistActiveAccountLocal()
-        }
-
-        refreshSymbolCandlesWithTrades(currentActiveSymbol)
-
-        val uid = firebaseAuth?.currentUser?.uid
-        val cloud = cloudRepository
-        if (uid != null && cloud != null) {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    cloud.deleteAccountAndData(safeKey, uid)
-                    if (remaining.isNotEmpty() && safeKey == activeAccountKey) {
-                        startCloudListeners(uid, cloud)
-                    }
-                } catch (ignored: Exception) {
-                }
-            }
-        }
+        // Reset user's unified account to clean defaults in Firestore
+        resetDemoAccount()
         return true
     }
 
     fun topUpDemo(amount: Double) {
-        _account.update { acc ->
-            acc.copy(
-                balance = acc.balance + amount,
-                deposit = acc.deposit + amount,
-                equity = acc.equity + amount,
-                freeMargin = acc.freeMargin + amount
-            )
-        }
-        recalculatePositionsAndAccount(_quotes.value)
-        persistActiveAccountLocal()
+        val cleanAdd = roundTo2(amount.coerceAtLeast(0.0))
+        if (cleanAdd <= 0.0) return
+        val current = _account.value
+        val updatedAccount = current.copy(
+            balance = roundTo2(current.balance + cleanAdd),
+            deposit = roundTo2(current.deposit + cleanAdd)
+        )
         val uid = firebaseAuth?.currentUser?.uid
         val cloud = cloudRepository
-        val updatedAccount = _account.value
-        val accKey = activeAccountKey
         if (uid != null && cloud != null) {
             scope.launch(Dispatchers.IO) {
-                try {
-                    cloud.saveOrUpdateAccount(updatedAccount, uid, accKey)
-                } catch (ignored: Exception) {
-                }
+                cloud.updateUserAccount(updatedAccount, uid)
             }
         }
     }

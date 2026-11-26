@@ -1,99 +1,187 @@
 {
   "entities": {
-    "TradePositionDoc": {
-      "title": "TradePositionDoc",
-      "description": "An open trading position belonging to an authenticated user.",
+    "UserAccountDoc": {
+      "title": "UserAccountDoc",
+      "description": "Authenticated user's trading account profile and balance document stored at /users/{userId}.",
       "type": "object",
       "properties": {
-        "userId": {
+        "email": {
           "type": "string",
-          "description": "The authenticated Firebase UID of the trade owner."
+          "description": "Authenticated user email address."
         },
-        "ticketId": {
+        "displayName": {
+          "type": "string",
+          "description": "Authenticated Google user's display name (default Trader)."
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Authenticated Google user's HTTPS profile photo URL (empty string if unavailable)."
+        },
+        "balance": {
+          "type": "number",
+          "description": "Current realized trading account balance in account currency (default 10000)."
+        },
+        "leverage": {
           "type": "integer",
-          "description": "The MT5 ticket number for the open position."
+          "description": "Account leverage ratio (default 500)."
         },
+        "currency": {
+          "type": "string",
+          "description": "Account currency code (default USD)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of account creation (FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last account update (FieldValue.serverTimestamp())."
+        },
+        "deposit": {
+          "type": "number",
+          "description": "Optional cumulative deposit amount."
+        },
+        "realizedProfit": {
+          "type": "number",
+          "description": "Optional cumulative realized profit."
+        },
+        "totalWithdrawal": {
+          "type": "number",
+          "description": "Optional cumulative withdrawals."
+        },
+        "totalSwap": {
+          "type": "number",
+          "description": "Optional cumulative swap."
+        },
+        "totalCommission": {
+          "type": "number",
+          "description": "Optional cumulative commission."
+        },
+        "accountName": {
+          "type": "string",
+          "description": "Optional display name for the MT5 account."
+        },
+        "brokerName": {
+          "type": "string",
+          "description": "Optional broker display name."
+        },
+        "accountId": {
+          "type": "string",
+          "description": "Optional MT5 account number/label."
+        },
+        "serverName": {
+          "type": "string",
+          "description": "Optional trading server name."
+        },
+        "isReal": {
+          "type": "boolean",
+          "description": "Optional flag indicating REAL vs DEMO badge."
+        },
+        "depositDate": {
+          "type": "string",
+          "description": "Optional formatted deposit date string."
+        },
+        "logoType": {
+          "type": "string",
+          "description": "Optional broker logo preference."
+        }
+      },
+      "required": [
+        "email",
+        "balance",
+        "leverage",
+        "currency",
+        "createdAt"
+      ]
+    },
+    "OpenTradeDoc": {
+      "title": "OpenTradeDoc",
+      "description": "An active open trading position stored under /users/{userId}/open_trades/{tradeId}. Floating P&L and live prices are never stored in Firestore.",
+      "type": "object",
+      "properties": {
         "symbol": {
           "type": "string",
-          "description": "Trading instrument symbol (e.g. XAUUSD, EURUSD)."
+          "description": "Trading symbol (e.g., XAUUSD, EURUSD, NAS100)."
         },
-        "isBuy": {
-          "type": "boolean",
-          "description": "True for BUY order, false for SELL order."
+        "type": {
+          "type": "string",
+          "enum": [
+            "BUY",
+            "SELL"
+          ],
+          "description": "Order direction."
         },
         "lots": {
           "type": "number",
-          "description": "Volume in lots (e.g. 0.10)."
+          "description": "Trade volume in lots."
         },
         "openPrice": {
           "type": "number",
           "description": "Entry execution price."
         },
-        "currentPrice": {
-          "type": "number",
-          "description": "Latest market price for the position."
-        },
         "sl": {
           "type": "number",
-          "description": "Optional Stop Loss price level."
+          "description": "Stop Loss price (0 when unset)."
         },
         "tp": {
           "type": "number",
-          "description": "Optional Take Profit price level."
+          "description": "Take Profit price (0 when unset)."
         },
-        "profit": {
+        "commission": {
           "type": "number",
-          "description": "Current floating profit/loss in USD."
+          "description": "Commission amount as numeric value."
+        },
+        "swap": {
+          "type": "number",
+          "description": "Swap amount as numeric value."
         },
         "openTime": {
           "type": "string",
-          "description": "Formatted timestamp string when the position was opened."
-        },
-        "createdAt": {
-          "type": "string",
           "format": "date-time",
-          "description": "Server timestamp of creation (FieldValue.serverTimestamp())."
+          "description": "Server timestamp when position was opened (FieldValue.serverTimestamp())."
+        },
+        "ticketId": {
+          "type": "integer",
+          "description": "Optional MT5 numeric ticket identifier."
         },
         "updatedAt": {
           "type": "string",
           "format": "date-time",
-          "description": "Server timestamp of last update (FieldValue.serverTimestamp())."
+          "description": "Optional server timestamp of last SL/TP modification."
         }
       },
       "required": [
-        "userId",
-        "ticketId",
         "symbol",
-        "isBuy",
+        "type",
         "lots",
         "openPrice",
-        "currentPrice",
-        "profit",
-        "openTime",
-        "createdAt",
-        "updatedAt"
+        "sl",
+        "tp",
+        "commission",
+        "swap",
+        "openTime"
       ]
     },
-    "HistoryTradeDoc": {
-      "title": "HistoryTradeDoc",
-      "description": "A closed historical trade record belonging to an authenticated user.",
+    "TradeHistoryDoc": {
+      "title": "TradeHistoryDoc",
+      "description": "A closed historical trade deal stored under /users/{userId}/trade_history/{dealId}.",
       "type": "object",
       "properties": {
-        "userId": {
-          "type": "string",
-          "description": "The authenticated Firebase UID of the trade owner."
-        },
-        "ticketId": {
-          "type": "integer",
-          "description": "The MT5 ticket number for the closed trade."
-        },
         "symbol": {
           "type": "string",
-          "description": "Trading instrument symbol (e.g. XAUUSD, EURUSD)."
+          "description": "Trading symbol (e.g., XAUUSD, EURUSD, NAS100) or Balance for withdrawals."
         },
-        "isBuy": {
-          "type": "boolean",
-          "description": "True for BUY trade, false for SELL trade."
+        "type": {
+          "type": "string",
+          "enum": [
+            "BUY",
+            "SELL",
+            "WITHDRAWAL",
+            "BALANCE"
+          ],
+          "description": "Closed trade direction or balance operation."
         },
         "lots": {
           "type": "number",
@@ -101,155 +189,106 @@
         },
         "openPrice": {
           "type": "number",
-          "description": "Entry price when opened."
+          "description": "Entry execution price."
         },
         "closePrice": {
           "type": "number",
-          "description": "Exit price when closed."
+          "description": "Exit execution price."
         },
         "profit": {
           "type": "number",
-          "description": "Realized profit/loss in USD."
-        },
-        "openTime": {
-          "type": "string",
-          "description": "Formatted open time."
-        },
-        "closeTime": {
-          "type": "string",
-          "description": "Formatted close time."
+          "description": "Gross realized profit in USD."
         },
         "commission": {
           "type": "number",
-          "description": "Commission charged in USD."
+          "description": "Commission fee in USD."
         },
         "swap": {
           "type": "number",
-          "description": "Swap fee in USD."
+          "description": "Swap adjustment in USD."
         },
-        "createdAt": {
+        "netProfit": {
+          "type": "number",
+          "description": "Net realized profit (grossProfit - commission + swap)."
+        },
+        "openTime": {
           "type": "string",
           "format": "date-time",
-          "description": "Server timestamp of creation (FieldValue.serverTimestamp())."
+          "description": "Timestamp when the trade was opened."
+        },
+        "closeTime": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the trade was closed (FieldValue.serverTimestamp())."
+        },
+        "ticketId": {
+          "type": "integer",
+          "description": "Optional MT5 numeric ticket identifier."
+        },
+        "sl": {
+          "type": "number",
+          "description": "Optional Stop Loss price."
+        },
+        "tp": {
+          "type": "number",
+          "description": "Optional Take Profit price."
+        },
+        "isWithdrawal": {
+          "type": "boolean",
+          "description": "Optional flag for withdrawal ledger records."
+        },
+        "comment": {
+          "type": "string",
+          "description": "Optional trade or withdrawal comment."
+        },
+        "hitOutcome": {
+          "type": "string",
+          "enum": [
+            "NONE",
+            "TP_HIT",
+            "SL_HIT"
+          ],
+          "description": "Optional TP/SL hit outcome."
         },
         "updatedAt": {
           "type": "string",
           "format": "date-time",
-          "description": "Server timestamp of update (FieldValue.serverTimestamp())."
+          "description": "Optional server timestamp of last update."
         }
       },
       "required": [
-        "userId",
-        "ticketId",
         "symbol",
-        "isBuy",
+        "type",
         "lots",
         "openPrice",
         "closePrice",
         "profit",
-        "openTime",
-        "closeTime",
         "commission",
         "swap",
-        "createdAt",
-        "updatedAt"
-      ]
-    },
-    "AccountDoc": {
-      "title": "AccountDoc",
-      "description": "Trading account balance and metadata for an authenticated user.",
-      "type": "object",
-      "properties": {
-        "userId": {
-          "type": "string",
-          "description": "The authenticated Firebase UID of the account owner."
-        },
-        "balance": {
-          "type": "number",
-          "description": "Current account balance in USD."
-        },
-        "deposit": {
-          "type": "number",
-          "description": "Total deposited amount in USD."
-        },
-        "realizedProfit": {
-          "type": "number",
-          "description": "Cumulative realized profit/loss in USD."
-        },
-        "totalSwap": {
-          "type": "number",
-          "description": "Cumulative swap fees in USD."
-        },
-        "totalCommission": {
-          "type": "number",
-          "description": "Cumulative commission fees in USD."
-        },
-        "accountName": {
-          "type": "string",
-          "description": "Display name of the trading account."
-        },
-        "brokerName": {
-          "type": "string",
-          "description": "Broker company name."
-        },
-        "accountId": {
-          "type": "string",
-          "description": "Broker account identifier."
-        },
-        "serverName": {
-          "type": "string",
-          "description": "Trading server name."
-        },
-        "isReal": {
-          "type": "boolean",
-          "description": "Whether account is marked REAL or DEMO."
-        },
-        "createdAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp of creation (FieldValue.serverTimestamp())."
-        },
-        "updatedAt": {
-          "type": "string",
-          "format": "date-time",
-          "description": "Server timestamp of last update (FieldValue.serverTimestamp())."
-        }
-      },
-      "required": [
-        "userId",
-        "balance",
-        "deposit",
-        "realizedProfit",
-        "totalSwap",
-        "totalCommission",
-        "accountName",
-        "brokerName",
-        "accountId",
-        "serverName",
-        "isReal",
-        "createdAt",
-        "updatedAt"
+        "netProfit",
+        "openTime",
+        "closeTime"
       ]
     }
   },
   "firestore": {
-    "/users/{userId}/positions/{positionId}": {
+    "/users/{userId}": {
       "schema": {
-        "$ref": "#/entities/TradePositionDoc"
+        "$ref": "#/entities/UserAccountDoc"
       },
-      "description": "Stores active open trading positions for a user."
+      "description": "Stores each authenticated user's unified account balance, leverage, currency, and optional display settings."
     },
-    "/users/{userId}/history/{historyId}": {
+    "/users/{userId}/open_trades/{tradeId}": {
       "schema": {
-        "$ref": "#/entities/HistoryTradeDoc"
+        "$ref": "#/entities/OpenTradeDoc"
       },
-      "description": "Stores closed historical trades for a user."
+      "description": "Stores active open trades for cross-platform Android and iOS real-time sync."
     },
-    "/users/{userId}/accounts/{accountDocId}": {
+    "/users/{userId}/trade_history/{dealId}": {
       "schema": {
-        "$ref": "#/entities/AccountDoc"
+        "$ref": "#/entities/TradeHistoryDoc"
       },
-      "description": "Stores trading account balance and profile details for a user."
+      "description": "Stores closed historical deals atomically recorded during Trade Close transactions."
     }
   }
 }

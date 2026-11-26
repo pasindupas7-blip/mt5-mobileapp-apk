@@ -57,8 +57,11 @@ class TradingViewModel @JvmOverloads constructor(
     val marketConnectionStatus: StateFlow<MarketConnectionStatus> = repository.marketConnectionStatus
     val fastForexLastSync: StateFlow<Long> = repository.fastForexService.lastSyncTimestamp
     val fastForexError: StateFlow<String?> = repository.fastForexService.lastErrorMessage
+    val isAuthInitialized: StateFlow<Boolean> = repository.isAuthInitialized
     val isCloudSynced: StateFlow<Boolean> = repository.isCloudSynced
     val currentUserEmail: StateFlow<String?> = repository.currentUserEmail
+    val currentUserDisplayName: StateFlow<String?> = repository.currentUserDisplayName
+    val currentUserPhotoUrl: StateFlow<String?> = repository.currentUserPhotoUrl
     val chartHistoryMoveEnabled: StateFlow<Boolean> = repository.chartHistoryMoveEnabled
     val showChartGrid: StateFlow<Boolean> = repository.showChartGrid
     val showSymbolDescription: StateFlow<Boolean> = repository.showSymbolDescription
@@ -112,6 +115,12 @@ class TradingViewModel @JvmOverloads constructor(
 
     private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
+
+    private val _isSigningIn = MutableStateFlow(false)
+    val isSigningIn: StateFlow<Boolean> = _isSigningIn.asStateFlow()
+
+    private val _authErrorMessage = MutableStateFlow<String?>(null)
+    val authErrorMessage: StateFlow<String?> = _authErrorMessage.asStateFlow()
 
     // Persistent History screen states across navigation (defaulting to LAST_WEEK on app start)
     private val _historySelectedPeriod = MutableStateFlow(HistoryPeriod.LAST_WEEK)
@@ -264,24 +273,46 @@ class TradingViewModel @JvmOverloads constructor(
         }
     }
 
+    fun clearAuthError() {
+        _authErrorMessage.value = null
+    }
+
     fun signInWithGoogle(activityContext: Context) {
+        if (_isSigningIn.value) return
         viewModelScope.launch {
-            val result = GoogleAuthHelper.signInWithGoogleButton(activityContext)
-            result.onSuccess { user ->
-                repository.syncNowWithServer()
-                showNotification("Cloud Server Connected: ${user.email ?: "Google Account"}")
-            }.onFailure { err ->
-                showNotification("Sign-In: ${err.message ?: "Unable to connect Google Account"}")
+            _isSigningIn.value = true
+            _authErrorMessage.value = null
+            try {
+                val result = GoogleAuthHelper.signInWithGoogleButton(activityContext)
+                result.onSuccess { user ->
+                    _authErrorMessage.value = null
+                    showNotification("Signed in as ${user.displayName ?: user.email ?: "Google Account"}")
+                }.onFailure { err ->
+                    val rawMsg = err.message.orEmpty()
+                    val cleanError = when {
+                        rawMsg.contains("cancel", ignoreCase = true) ||
+                            rawMsg.contains("dismiss", ignoreCase = true) ->
+                            "Sign-in was cancelled. Tap Continue with Google to try again."
+                        rawMsg.contains("NoCredential", ignoreCase = true) ->
+                            "No Google account found on this device. Please add a Google account in device settings."
+                        rawMsg.isNotBlank() -> rawMsg
+                        else -> "Unable to sign in with Google. Please try again."
+                    }
+                    _authErrorMessage.value = cleanError
+                    showNotification(cleanError)
+                }
+            } finally {
+                _isSigningIn.value = false
             }
         }
     }
 
     fun promptAutoSignInIfNeeded(activityContext: Context) {
-        if (isCloudSynced.value) return
+        if (isCloudSynced.value || _isSigningIn.value) return
         viewModelScope.launch {
             val result = GoogleAuthHelper.promptSignInIfEligible(activityContext)
             result.onSuccess { user ->
-                repository.syncNowWithServer()
+                _authErrorMessage.value = null
                 showNotification("Cloud Trade History Restored (${user.email ?: "Account"})")
             }
         }
@@ -289,8 +320,16 @@ class TradingViewModel @JvmOverloads constructor(
 
     fun signOutCloud(context: Context) {
         viewModelScope.launch {
-            GoogleAuthHelper.signOut(context)
-            showNotification("Signed out of Google Account")
+            _isDrawerOpen.value = false
+            _showSettingsPage.value = false
+            _showAccountsPage.value = false
+            _showAboutPage.value = false
+            _activeDialog.value = ActiveDialog.None
+            _authErrorMessage.value = null
+            GoogleAuthHelper.signOut(context) {
+                repository.prepareForSignOut()
+            }
+            showNotification("Signed out cleanly")
         }
     }
 

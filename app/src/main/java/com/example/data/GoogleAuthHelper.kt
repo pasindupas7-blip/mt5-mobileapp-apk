@@ -19,7 +19,9 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 
 object GoogleAuthHelper {
     private const val TAG = "GoogleAuthHelper"
@@ -159,15 +161,29 @@ object GoogleAuthHelper {
         }
     }
 
-    suspend fun signOut(context: Context) {
-        try {
-            FirebaseAuth.getInstance().signOut()
-            val credentialManager = CredentialManager.create(context)
-            credentialManager.clearCredentialState(ClearCredentialStateRequest())
-        } catch (e: CancellationException) {
-            throw e
-        } catch (t: Throwable) {
-            Log.w(TAG, "Error clearing credential state: ${t.message}")
+    /**
+     * Detaches active listeners cleanly before clearing Credential Manager and signing out of Firebase Auth
+     * inside [NonCancellable] so UI unmounts cannot interrupt teardown.
+     */
+    suspend fun signOut(context: Context, onBeforeFirebaseSignOut: () -> Unit = {}) {
+        withContext(NonCancellable) {
+            try {
+                onBeforeFirebaseSignOut()
+            } catch (t: Throwable) {
+                Log.w(TAG, "Error during pre-sign-out listener teardown: ${t.message}")
+            }
+            try {
+                val credentialManager = CredentialManager.create(context)
+                credentialManager.clearCredentialState(ClearCredentialStateRequest())
+            } catch (t: Throwable) {
+                Log.w(TAG, "Error clearing credential state: ${t.message}")
+            } finally {
+                try {
+                    FirebaseAuth.getInstance().signOut()
+                } catch (t: Throwable) {
+                    Log.w(TAG, "Error signing out of FirebaseAuth: ${t.message}")
+                }
+            }
         }
     }
 }

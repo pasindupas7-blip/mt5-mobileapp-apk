@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.AccountInfo
+import com.example.ui.auth.ContinueWithGoogleButton
 import com.example.ui.components.MT5AccountBrokerLogo
 import com.example.ui.components.MT5FundingPipsLogo
 import com.example.ui.components.MT5FusionMarketsLogo
@@ -92,6 +93,7 @@ fun AccountsScreen(
     val account by viewModel.account.collectAsState()
     val accounts by viewModel.accounts.collectAsState()
     val isCloudSynced by viewModel.isCloudSynced.collectAsState()
+    val isSigningIn by viewModel.isSigningIn.collectAsState()
     val hasLoadedAccounts = isCloudSynced && accounts.isNotEmpty()
 
     var showMenu by remember { mutableStateOf(false) }
@@ -588,21 +590,13 @@ fun AccountsScreen(
                             textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(18.dp))
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = MT5Blue,
+                        ContinueWithGoogleButton(
+                            isLoading = isSigningIn,
+                            onClick = { viewModel.signInWithGoogle(context) },
                             modifier = Modifier
-                                .clickable { viewModel.signInWithGoogle(context) }
+                                .fillMaxWidth()
                                 .testTag("accounts_google_sign_in_button")
-                        ) {
-                            Text(
-                                text = "Sign in with Google",
-                                fontSize = 14.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
-                            )
-                        }
+                        )
                     }
                 }
             }

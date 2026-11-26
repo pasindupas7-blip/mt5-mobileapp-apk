@@ -25,6 +25,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
@@ -32,7 +33,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,10 +44,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.model.TickDirection
 import com.example.ui.about.AboutScreen
 import com.example.ui.accounts.AccountsScreen
+import com.example.ui.auth.GoogleSignInScreen
 import com.example.ui.chart.ChartScreen
 import com.example.ui.components.ClosePositionDialog
 import com.example.ui.components.MT5BottomBar
@@ -78,16 +80,46 @@ fun MainTradingScreen(
         viewModel.initializeStorage(context)
     }
 
-    val currentTab by viewModel.currentTab.collectAsState()
-    val activeDialog by viewModel.activeDialog.collectAsState()
-    val toastMessage by viewModel.toastMessage.collectAsState()
-    val quotes by viewModel.quotes.collectAsState()
-    val positions by viewModel.positions.collectAsState()
-    val account by viewModel.account.collectAsState()
-    val isDrawerOpen by viewModel.isDrawerOpen.collectAsState()
-    val showSettingsPage by viewModel.showSettingsPage.collectAsState()
-    val showAccountsPage by viewModel.showAccountsPage.collectAsState()
-    val showAboutPage by viewModel.showAboutPage.collectAsState()
+    val isAuthInitialized by viewModel.isAuthInitialized.collectAsStateWithLifecycle()
+    val isCloudSynced by viewModel.isCloudSynced.collectAsStateWithLifecycle()
+    val isSigningIn by viewModel.isSigningIn.collectAsStateWithLifecycle()
+    val authErrorMessage by viewModel.authErrorMessage.collectAsStateWithLifecycle()
+    val currentUserDisplayName by viewModel.currentUserDisplayName.collectAsStateWithLifecycle()
+    val currentUserEmail by viewModel.currentUserEmail.collectAsStateWithLifecycle()
+    val currentUserPhotoUrl by viewModel.currentUserPhotoUrl.collectAsStateWithLifecycle()
+
+    val currentTab by viewModel.currentTab.collectAsStateWithLifecycle()
+    val activeDialog by viewModel.activeDialog.collectAsStateWithLifecycle()
+    val toastMessage by viewModel.toastMessage.collectAsStateWithLifecycle()
+    val quotes by viewModel.quotes.collectAsStateWithLifecycle()
+    val positions by viewModel.positions.collectAsStateWithLifecycle()
+    val account by viewModel.account.collectAsStateWithLifecycle()
+    val isDrawerOpen by viewModel.isDrawerOpen.collectAsStateWithLifecycle()
+    val showSettingsPage by viewModel.showSettingsPage.collectAsStateWithLifecycle()
+    val showAccountsPage by viewModel.showAccountsPage.collectAsStateWithLifecycle()
+    val showAboutPage by viewModel.showAboutPage.collectAsStateWithLifecycle()
+
+    if (!isAuthInitialized) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.White),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(color = MT5Blue)
+        }
+        return
+    }
+
+    if (!isCloudSynced) {
+        GoogleSignInScreen(
+            isSigningIn = isSigningIn,
+            errorMessage = authErrorMessage,
+            onContinueWithGoogle = { viewModel.signInWithGoogle(context) },
+            onDismissError = { viewModel.clearAuthError() }
+        )
+        return
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -207,6 +239,9 @@ fun MainTradingScreen(
         MT5NavigationDrawerOverlay(
             isOpen = isDrawerOpen,
             account = account,
+            userDisplayName = currentUserDisplayName,
+            userEmail = currentUserEmail,
+            userPhotoUrl = currentUserPhotoUrl,
             onDismiss = { viewModel.closeDrawer() },
             onManageAccountsClick = {
                 viewModel.openAccountsPage()
@@ -234,6 +269,9 @@ fun MainTradingScreen(
             },
             onAboutClick = {
                 viewModel.openAboutPage()
+            },
+            onSignOutClick = {
+                viewModel.signOutCloud(context)
             }
         )
     }

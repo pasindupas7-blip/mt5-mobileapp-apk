@@ -40,225 +40,335 @@ beforeEach(async () => {
   }
 });
 
-const serverTs = () => new Date();
+const safeNow = () => new Date(Date.now() - 1000);
+const futureTs = () => new Date(Date.now() + 60000);
 
-function validPositionPayload(userId) {
+function validMinimalUserDoc() {
   return {
-    userId,
-    ticketId: 1001,
-    symbol: "XAUUSD",
-    isBuy: true,
-    lots: 0.1,
-    openPrice: 4165.54,
-    currentPrice: 4165.54,
-    profit: 0.0,
-    openTime: "2026.10.19 10:00:00",
-    createdAt: serverTs(),
-    updatedAt: serverTs(),
+    email: "alice@example.com",
+    balance: 10000.0,
+    leverage: 500,
+    currency: "USD",
+    createdAt: safeNow(),
   };
 }
 
-function validHistoryPayload(userId) {
+function validOpenTradeDoc(overrides = {}) {
   return {
-    userId,
-    ticketId: 1001,
     symbol: "XAUUSD",
-    isBuy: true,
+    type: "BUY",
     lots: 0.1,
     openPrice: 4165.54,
-    closePrice: 4168.54,
-    profit: 30.0,
-    openTime: "2026.10.19 10:00:00",
-    closeTime: "2026.10.19 10:15:00",
-    commission: -0.5,
+    sl: 4150.0,
+    tp: 4195.0,
+    commission: 0.7,
     swap: 0.0,
-    createdAt: serverTs(),
-    updatedAt: serverTs(),
+    openTime: safeNow(),
+    ...overrides,
   };
 }
 
-function validAccountPayload(userId) {
+function validTradeHistoryDoc(overrides = {}) {
   return {
-    userId,
-    balance: 518.16,
-    deposit: 674.08,
-    realizedProfit: -139.83,
-    totalSwap: 0.0,
-    totalCommission: -15.4,
-    accountName: "REAL 21",
-    brokerName: "Fusion Markets Pty Ltd",
-    accountId: "420784 - FusionMarkets-Real",
-    serverName: "Local Access Server",
-    isReal: true,
-    createdAt: serverTs(),
-    updatedAt: serverTs(),
+    symbol: "XAUUSD",
+    type: "BUY",
+    lots: 0.1,
+    openPrice: 4165.54,
+    closePrice: 4175.54,
+    profit: 100.0,
+    commission: 0.7,
+    swap: -0.3,
+    netProfit: 99.0,
+    openTime: new Date(Date.now() - 60000),
+    closeTime: safeNow(),
+    ...overrides,
   };
 }
 
-test("Unauthenticated user cannot read or write positions, history, or accounts", async () => {
+test("Unauthenticated users are denied access to users, open_trades, and trade_history", async () => {
   const unauthDb = testEnv.unauthenticatedContext().firestore();
+
+  await assertFails(unauthDb.collection("users").doc(ALICE_UID).get());
   await assertFails(
-    unauthDb.collection("users").doc(ALICE_UID).collection("positions").get()
+    unauthDb.collection("users").doc(ALICE_UID).set(validMinimalUserDoc())
+  );
+  await assertFails(
+    unauthDb.collection("users").doc(ALICE_UID).collection("open_trades").get()
   );
   await assertFails(
     unauthDb
       .collection("users")
       .doc(ALICE_UID)
-      .collection("positions")
-      .doc("pos_1")
-      .set(validPositionPayload(ALICE_UID))
+      .collection("open_trades")
+      .doc("t1")
+      .set(validOpenTradeDoc())
   );
   await assertFails(
-    unauthDb.collection("users").doc(ALICE_UID).collection("history").get()
+    unauthDb.collection("users").doc(ALICE_UID).collection("trade_history").get()
   );
 });
 
-test("Authenticated user can create, read, update, and delete their own position", async () => {
+test("Owner can create, read, and update users/{uid} with minimal cross-platform and full Android fields", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
-  const posRef = aliceDb
-    .collection("users")
-    .doc(ALICE_UID)
-    .collection("positions")
-    .doc("pos_1001");
+  const userRef = aliceDb.collection("users").doc(ALICE_UID);
 
-  await assertSucceeds(posRef.set(validPositionPayload(ALICE_UID)));
-  await assertSucceeds(posRef.get());
+  const created = {
+    ...validMinimalUserDoc(),
+    displayName: "Alice Trader",
+    photoURL: "https://lh3.googleusercontent.com/a/example-photo",
+  };
+  await assertSucceeds(userRef.set(created));
+  await assertSucceeds(userRef.get());
+
   await assertSucceeds(
-    posRef.update({
-      currentPrice: 4167.24,
-      profit: 17.0,
-      updatedAt: serverTs(),
+    userRef.update({
+      displayName: "Alice Pro",
+      photoURL: "https://lh3.googleusercontent.com/a/updated-photo",
+      balance: 10250.75,
+      deposit: 10000.0,
+      realizedProfit: 251.45,
+      totalCommission: -0.7,
+      totalSwap: 0.0,
+      accountName: "Fusion Pro",
+      brokerName: "Fusion Markets Pty Ltd",
+      accountId: "420784 - FusionMarkets-Real",
+      serverName: "Local Access Server",
+      isReal: true,
+      logoType: "AUTO",
+      updatedAt: safeNow(),
     })
   );
-  await assertSucceeds(posRef.delete());
+
+  // Unsafe non-HTTPS photoURL is rejected
+  await assertFails(
+    userRef.update({
+      photoURL: "javascript:alert(1)",
+    })
+  );
+
+  // Immutable createdAt cannot be modified on update
+  await assertFails(
+    userRef.update({
+      createdAt: new Date(Date.now() - 500000),
+    })
+  );
+
+  // Ghost fields are rejected
+  await assertFails(
+    userRef.update({
+      isAdmin: true,
+    })
+  );
+
+  // String balance is rejected (must be numeric)
+  await assertFails(
+    userRef.update({
+      balance: "10250.75",
+    })
+  );
 });
 
-test("Authenticated user cannot read or write another user's positions or history", async () => {
+test("Owner can create, list ordered by openTime desc, modify SL/TP, and delete open_trades", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const openCol = aliceDb
+    .collection("users")
+    .doc(ALICE_UID)
+    .collection("open_trades");
+
+  const t1Ref = openCol.doc("trade_001");
+  const t2Ref = openCol.doc("trade_002");
+
   await assertSucceeds(
-    aliceDb
-      .collection("users")
-      .doc(ALICE_UID)
-      .collection("history")
-      .doc("hist_1001")
-      .set(validHistoryPayload(ALICE_UID))
+    t1Ref.set(
+      validOpenTradeDoc({
+        openTime: new Date(Date.now() - 20000),
+        ticketId: 385000101,
+      })
+    )
+  );
+  await assertSucceeds(
+    t2Ref.set(
+      validOpenTradeDoc({
+        type: "SELL",
+        lots: 0.25,
+        openTime: new Date(Date.now() - 5000),
+      })
+    )
+  );
+
+  const listSnap = await assertSucceeds(
+    openCol.orderBy("openTime", "desc").get()
+  );
+  if (listSnap.docs.length !== 2 || listSnap.docs[0].id !== "trade_002") {
+    throw new Error("Expected 2 open trades ordered by openTime desc");
+  }
+
+  // Modify SL/TP without touching openTime
+  await assertSucceeds(
+    t1Ref.update({
+      sl: 4155.0,
+      tp: 4205.0,
+      updatedAt: safeNow(),
+    })
+  );
+
+  // Cannot mutate immutable openTime
+  await assertFails(
+    t1Ref.update({
+      openTime: safeNow(),
+    })
+  );
+
+  // Cannot store live floating P&L or currentPrice on open_trades (free tier protection)
+  await assertFails(
+    t1Ref.update({
+      profit: 45.2,
+      currentPrice: 4170.0,
+    })
+  );
+
+  await assertSucceeds(t2Ref.delete());
+});
+
+test("Invalid numeric types, invalid trade type, and future timestamps are rejected on open_trades and trade_history", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const openCol = aliceDb
+    .collection("users")
+    .doc(ALICE_UID)
+    .collection("open_trades");
+  const histCol = aliceDb
+    .collection("users")
+    .doc(ALICE_UID)
+    .collection("trade_history");
+
+  await assertFails(
+    openCol.doc("bad_lots").set(validOpenTradeDoc({ lots: "0.10" }))
+  );
+  await assertFails(
+    openCol.doc("bad_type").set(validOpenTradeDoc({ type: "HOLD" }))
+  );
+  await assertFails(
+    openCol.doc("future_open").set(validOpenTradeDoc({ openTime: futureTs() }))
+  );
+  await assertFails(
+    histCol
+      .doc("bad_net")
+      .set(validTradeHistoryDoc({ netProfit: "99.00" }))
+  );
+  await assertFails(
+    histCol
+      .doc("future_close")
+      .set(validTradeHistoryDoc({ closeTime: futureTs() }))
+  );
+});
+
+test("Atomic runTransaction closes open trade, writes trade_history with netProfit, and updates user balance", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const userRef = aliceDb.collection("users").doc(ALICE_UID);
+  const openRef = userRef.collection("open_trades").doc("trade_tx_1");
+  const dealRef = userRef.collection("trade_history").doc("deal_tx_1");
+
+  await assertSucceeds(userRef.set(validMinimalUserDoc()));
+  await assertSucceeds(
+    openRef.set(
+      validOpenTradeDoc({
+        openTime: new Date(Date.now() - 30000),
+      })
+    )
+  );
+
+  await assertSucceeds(
+    aliceDb.runTransaction(async (tx) => {
+      const openSnap = await tx.get(openRef);
+      const userSnap = await tx.get(userRef);
+      if (!openSnap.exists) {
+        throw new Error("Open trade missing");
+      }
+      const openData = openSnap.data();
+      const currentBalance = userSnap.data().balance;
+      const grossProfit = 100.0;
+      const commission = openData.commission;
+      const swap = -0.3;
+      const netProfit = grossProfit - commission + swap;
+
+      tx.delete(openRef);
+      tx.set(dealRef, {
+        symbol: openData.symbol,
+        type: openData.type,
+        lots: openData.lots,
+        openPrice: openData.openPrice,
+        closePrice: 4175.54,
+        profit: grossProfit,
+        commission,
+        swap,
+        netProfit,
+        openTime: openData.openTime,
+        closeTime: safeNow(),
+        sl: openData.sl,
+        tp: openData.tp,
+        isWithdrawal: false,
+        hitOutcome: "TP_HIT",
+        updatedAt: safeNow(),
+      });
+      tx.update(userRef, {
+        balance: currentBalance + netProfit,
+        realizedProfit: grossProfit,
+        totalCommission: -commission,
+        totalSwap: swap,
+        updatedAt: safeNow(),
+      });
+    })
+  );
+
+  const histSnap = await assertSucceeds(
+    userRef.collection("trade_history").orderBy("closeTime", "desc").get()
+  );
+  if (histSnap.docs.length !== 1 || histSnap.docs[0].data().netProfit !== 99.0) {
+    throw new Error("Expected 1 closed trade with netProfit = 99.0");
+  }
+});
+
+test("Cross-user isolation blocks Bob from accessing Alice's account, open_trades, and trade_history", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const aliceUserRef = aliceDb.collection("users").doc(ALICE_UID);
+  await assertSucceeds(aliceUserRef.set(validMinimalUserDoc()));
+  await assertSucceeds(
+    aliceUserRef.collection("open_trades").doc("t1").set(validOpenTradeDoc())
+  );
+  await assertSucceeds(
+    aliceUserRef
+      .collection("trade_history")
+      .doc("d1")
+      .set(validTradeHistoryDoc())
   );
 
   const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+  const targetUserRef = bobDb.collection("users").doc(ALICE_UID);
+
+  await assertFails(targetUserRef.get());
+  await assertFails(targetUserRef.update({ balance: 999999 }));
+  await assertFails(targetUserRef.delete());
+  await assertFails(targetUserRef.collection("open_trades").get());
+  await assertFails(targetUserRef.collection("open_trades").doc("t1").get());
   await assertFails(
-    bobDb
-      .collection("users")
-      .doc(ALICE_UID)
-      .collection("history")
-      .doc("hist_1001")
-      .get()
+    targetUserRef.collection("open_trades").doc("t1").update({ sl: 1.0 })
   );
+  await assertFails(targetUserRef.collection("open_trades").doc("t1").delete());
+  await assertFails(targetUserRef.collection("trade_history").get());
+  await assertFails(targetUserRef.collection("trade_history").doc("d1").get());
   await assertFails(
-    bobDb
-      .collection("users")
-      .doc(ALICE_UID)
-      .collection("history")
-      .where("userId", "==", ALICE_UID)
-      .get()
+    targetUserRef.collection("trade_history").doc("d1").delete()
   );
 });
 
-test("Shadow update with extra unauthorized field is rejected", async () => {
+test("Legacy collection paths (positions, history, accounts) are denied by default-deny", async () => {
   const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
-  const badPayload = {
-    ...validPositionPayload(ALICE_UID),
-    isAdminOverride: true,
-  };
+  const userRef = aliceDb.collection("users").doc(ALICE_UID);
+
+  await assertFails(userRef.collection("positions").get());
   await assertFails(
-    aliceDb
-      .collection("users")
-      .doc(ALICE_UID)
-      .collection("positions")
-      .doc("pos_bad")
-      .set(badPayload)
+    userRef.collection("positions").doc("p1").set(validOpenTradeDoc())
   );
+  await assertFails(userRef.collection("history").get());
+  await assertFails(userRef.collection("accounts").doc("main").get());
 });
-
-test("Authenticated user can create and update their own trading account document", async () => {
-  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
-  const accRef = aliceDb
-    .collection("users")
-    .doc(ALICE_UID)
-    .collection("accounts")
-    .doc("main");
-
-  await assertSucceeds(accRef.set(validAccountPayload(ALICE_UID)));
-  await assertSucceeds(
-    accRef.update({
-      balance: 548.16,
-      realizedProfit: -109.83,
-      updatedAt: serverTs(),
-    })
-  );
-});
-
-test("Authenticated user can update their own history trade in-place without deleting", async () => {
-  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
-  const histRef = aliceDb
-    .collection("users")
-    .doc(ALICE_UID)
-    .collection("history")
-    .doc("hist_acc_1762620000000_456_387100001");
-
-  const initialPayload = {
-    ...validHistoryPayload(ALICE_UID),
-    openTime: "2026.10.19 10:00:00|4150.0|4185.0|#387100001|TP",
-  };
-  await assertSucceeds(histRef.set(initialPayload));
-  await assertSucceeds(
-    histRef.update({
-      profit: 45.25,
-      closePrice: 4170.05,
-      updatedAt: serverTs(),
-    })
-  );
-});
-
-test("iOS Web SDK position and history documents (unprefixed ID, string ticketId, integer numbers, no createdAt) can be created, listed, updated, and deleted", async () => {
-  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
-  const iosPosRef = aliceDb
-    .collection("users")
-    .doc(ALICE_UID)
-    .collection("positions")
-    .doc("387200105");
-
-  await assertSucceeds(
-    iosPosRef.set({
-      ticketId: "#387200105",
-      symbol: "XAUUSD",
-      isBuy: false,
-      lots: 1,
-      openPrice: 4550,
-      currentPrice: 4540,
-      sl: 4560,
-      tp: 4520,
-      profit: 1000,
-      openTime: "2026.11.08 08:00:00|4560|4520|#387200105",
-    })
-  );
-
-  // Unfiltered subcollection list (used by observeOpenPositions) succeeds
-  const listSnap = await assertSucceeds(
-    aliceDb.collection("users").doc(ALICE_UID).collection("positions").get()
-  );
-  if (listSnap.docs.length !== 1) {
-    throw new Error(`Expected 1 position doc, got ${listSnap.docs.length}`);
-  }
-
-  // Updating SL/TP via set() or update() without createdAt succeeds
-  await assertSucceeds(
-    iosPosRef.update({
-      sl: 4555,
-      tp: 4510,
-    })
-  );
-
-  await assertSucceeds(iosPosRef.delete());
-});
-
-

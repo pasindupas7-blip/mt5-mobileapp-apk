@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -29,6 +31,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.CalendarToday
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.HelpOutline
@@ -40,9 +43,13 @@ import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,11 +58,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import com.example.R
 import com.example.model.AccountInfo
 import kotlin.math.cos
 import kotlin.math.sin
@@ -114,6 +125,9 @@ fun MT5HamburgerButton(
 fun MT5NavigationDrawerOverlay(
     isOpen: Boolean,
     account: AccountInfo,
+    userDisplayName: String? = null,
+    userEmail: String? = null,
+    userPhotoUrl: String? = null,
     onDismiss: () -> Unit,
     onManageAccountsClick: () -> Unit,
     onTradeClick: () -> Unit,
@@ -123,7 +137,8 @@ fun MT5NavigationDrawerOverlay(
     onSettingsClick: () -> Unit,
     onCommunityClick: () -> Unit,
     onAlgoTradingClick: () -> Unit,
-    onAboutClick: () -> Unit = onSettingsClick
+    onAboutClick: () -> Unit = onSettingsClick,
+    onSignOutClick: () -> Unit = {}
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         // Dark scrim over right side of screen
@@ -144,7 +159,7 @@ fun MT5NavigationDrawerOverlay(
             )
         }
 
-        // Slide-out white drawer panel (matches Screenshot 1: 865080757_932275263096793_5580651177513903920_n.jpg)
+        // Slide-out white drawer panel with Google Profile header and Sign Out footer
         AnimatedVisibility(
             visible = isOpen,
             enter = slideInHorizontally(
@@ -166,74 +181,127 @@ fun MT5NavigationDrawerOverlay(
                         indication = null
                     ) { /* Consume clicks inside drawer */ }
                     .statusBarsPadding()
-                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()
                     .testTag("mt5_navigation_drawer")
             ) {
-                // Top Account Header (clicking anywhere on the account header or "Manage accounts" opens AccountsScreen)
-                Row(
+                // Scrollable upper drawer content
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onManageAccountsClick() }
-                        .padding(start = 18.dp, end = 16.dp, top = 16.dp, bottom = 14.dp),
-                    verticalAlignment = Alignment.Top
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState())
                 ) {
-                    // Broker logo icon matching active account
-                    MT5AccountBrokerLogo(
-                        account = account,
+                    // Authenticated Google Profile Banner (photoURL, displayName, email)
+                    val resolvedProfileName = userDisplayName?.trim()?.ifBlank { null }
+                        ?: account.accountName.trim().ifBlank { null }
+                        ?: stringResource(R.string.auth_default_trader_name)
+                    val resolvedProfileEmail = userEmail?.trim().orEmpty()
+
+                    Row(
                         modifier = Modifier
-                            .padding(top = 2.dp)
-                            .size(36.dp)
-                    )
-
-                    Spacer(modifier = Modifier.width(18.dp))
-
-                    val hasConnectedAccount = account.accountName.isNotBlank()
-                    val drawerDisplayName = when {
-                        !hasConnectedAccount -> "No account connected"
-                        account.accountName.startsWith("Pasindu Jeewantha Pelan") -> "Pasindu Jeewantha Pelan..."
-                        else -> account.accountName
-                    }
-                    val drawerDisplayId = when {
-                        !hasConnectedAccount -> "Connect Google to load accounts"
-                        account.accountId.startsWith("36054607") -> "36054607 - MonetaMarkets..."
-                        account.accountId.startsWith("1066312") -> "1066312 - MonetaMarkets-..."
-                        else -> account.accountId.replace("\u2014", "-")
-                    }
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = drawerDisplayName,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Normal,
-                            color = Color(0xFF1C1C1E),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            .fillMaxWidth()
+                            .background(Color(0xFFF8FAFC))
+                            .clickable { onManageAccountsClick() }
+                            .padding(horizontal = 18.dp, vertical = 16.dp)
+                            .testTag("drawer_google_profile_header"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        GoogleProfileAvatar(
+                            photoUrl = userPhotoUrl,
+                            displayName = resolvedProfileName,
+                            modifier = Modifier.size(48.dp)
                         )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = drawerDisplayId,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Normal,
-                            color = Color(0xFF757575),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = "Manage accounts",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Normal,
-                            color = Color(0xFF1A73E8),
+                        Spacer(modifier = Modifier.width(14.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = resolvedProfileName,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1C1C1E),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.testTag("drawer_profile_name")
+                            )
+                            if (resolvedProfileEmail.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = resolvedProfileEmail,
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Normal,
+                                    color = Color(0xFF5F6368),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.testTag("drawer_profile_email")
+                                )
+                            }
+                        }
+                    }
+
+                    HorizontalDivider(thickness = 0.7.dp, color = Color(0xFFE5E7EB))
+
+                    // Active Trading Account Header + Manage accounts link
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onManageAccountsClick() }
+                            .padding(start = 18.dp, end = 16.dp, top = 14.dp, bottom = 14.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        MT5AccountBrokerLogo(
+                            account = account,
                             modifier = Modifier
-                                .clickable { onManageAccountsClick() }
-                                .testTag("drawer_manage_accounts")
+                                .padding(top = 2.dp)
+                                .size(34.dp)
                         )
+
+                        Spacer(modifier = Modifier.width(16.dp))
+
+                        val hasConnectedAccount = account.accountName.isNotBlank()
+                        val drawerDisplayName = when {
+                            !hasConnectedAccount -> "No account connected"
+                            account.accountName.startsWith("Pasindu Jeewantha Pelan") -> "Pasindu Jeewantha Pelan..."
+                            else -> account.accountName
+                        }
+                        val drawerDisplayId = when {
+                            !hasConnectedAccount -> "Connect Google to load accounts"
+                            account.accountId.startsWith("36054607") -> "36054607 - MonetaMarkets..."
+                            account.accountId.startsWith("1066312") -> "1066312 - MonetaMarkets-..."
+                            else -> account.accountId.replace("\u2014", "-")
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = drawerDisplayName,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF1C1C1E),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = drawerDisplayId,
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Normal,
+                                color = Color(0xFF757575),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "Manage accounts",
+                                fontSize = 14.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF1A73E8),
+                                modifier = Modifier
+                                    .clickable { onManageAccountsClick() }
+                                    .testTag("drawer_manage_accounts")
+                            )
+                        }
                     }
-                }
 
-                HorizontalDivider(thickness = 0.7.dp, color = Color(0xFFE5E7EB))
+                    HorizontalDivider(thickness = 0.7.dp, color = Color(0xFFE5E7EB))
 
-                Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
                 // 1. Trade (custom trending line with 3 nodes icon)
                 DrawerCustomRow(
@@ -302,15 +370,85 @@ fun MT5NavigationDrawerOverlay(
                     onClick = onSettingsClick
                 )
 
-                // 10. About
-                DrawerVectorRow(
-                    icon = Icons.Outlined.Info,
-                    title = "About",
-                    onClick = onAboutClick
-                )
+                    // 10. About
+                    DrawerVectorRow(
+                        icon = Icons.Outlined.Info,
+                        title = "About",
+                        onClick = onAboutClick
+                    )
 
-                Spacer(modifier = Modifier.height(24.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                // Pinned Footer: Clean Sign Out Button
+                HorizontalDivider(thickness = 0.7.dp, color = Color(0xFFE5E7EB))
+                Surface(
+                    color = Color.White,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 52.dp)
+                            .clickable(onClick = onSignOutClick)
+                            .padding(horizontal = 20.dp, vertical = 14.dp)
+                            .testTag("drawer_sign_out_button"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.Logout,
+                            contentDescription = stringResource(R.string.auth_sign_out),
+                            tint = Color(0xFFD93025),
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(modifier = Modifier.width(20.dp))
+                        Text(
+                            text = stringResource(R.string.auth_sign_out),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFD93025)
+                        )
+                    }
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun GoogleProfileAvatar(
+    photoUrl: String?,
+    displayName: String,
+    modifier: Modifier = Modifier
+) {
+    val cleanUrl = photoUrl?.trim()?.takeIf { it.startsWith("https://") }
+    var imageFailed by remember(cleanUrl) { mutableStateOf(false) }
+    val initial = displayName.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "T"
+
+    Box(
+        modifier = modifier
+            .clip(CircleShape)
+            .background(Color(0xFFE8F0FE))
+            .border(1.dp, Color(0xFFD2E3FC), CircleShape)
+            .testTag("drawer_profile_avatar"),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = initial,
+            fontSize = 19.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFF1A73E8)
+        )
+        if (cleanUrl != null && !imageFailed) {
+            AsyncImage(
+                model = cleanUrl,
+                contentDescription = stringResource(R.string.auth_profile_avatar_desc),
+                contentScale = ContentScale.Crop,
+                onError = { imageFailed = true },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+            )
         }
     }
 }

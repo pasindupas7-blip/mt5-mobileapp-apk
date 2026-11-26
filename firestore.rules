@@ -16,6 +16,10 @@ service cloud.firestore {
       return request.resource.data;
     }
 
+    function existing() {
+      return resource.data;
+    }
+
     function isValidId(id) {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -24,162 +28,181 @@ service cloud.firestore {
       return val is int || val is float;
     }
 
-    function isValidTicket(val) {
-      return (val is int && val > 0) ||
-             (val is float && val > 0) ||
-             (val is string && val.size() >= 1 && val.size() <= 64);
+    function isValidUserAccount(data) {
+      return data.email is string && data.email.size() <= 254 &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1024 && (data.photoURL == '' || data.photoURL.matches('^https://.*')))) &&
+             isNum(data.balance) &&
+             isNum(data.leverage) && data.leverage >= 1 && data.leverage <= 5000 &&
+             data.currency is string && data.currency.size() >= 1 && data.currency.size() <= 12 &&
+             (!('createdAt' in data) || (data.createdAt is timestamp && data.createdAt <= request.time)) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time)) &&
+             (!('deposit' in data) || (isNum(data.deposit) && data.deposit >= 0)) &&
+             (!('realizedProfit' in data) || isNum(data.realizedProfit)) &&
+             (!('totalWithdrawal' in data) || (isNum(data.totalWithdrawal) && data.totalWithdrawal >= 0)) &&
+             (!('totalSwap' in data) || isNum(data.totalSwap)) &&
+             (!('totalCommission' in data) || isNum(data.totalCommission)) &&
+             (!('accountName' in data) || (data.accountName is string && data.accountName.size() <= 128)) &&
+             (!('brokerName' in data) || (data.brokerName is string && data.brokerName.size() <= 128)) &&
+             (!('accountId' in data) || (data.accountId is string && data.accountId.size() <= 128)) &&
+             (!('serverName' in data) || (data.serverName is string && data.serverName.size() <= 128)) &&
+             (!('isReal' in data) || data.isReal is bool) &&
+             (!('depositDate' in data) || (data.depositDate is string && data.depositDate.size() <= 64)) &&
+             (!('logoType' in data) || (data.logoType is string && data.logoType.size() <= 32));
     }
 
-    function isValidPosition(data, userId) {
-      return (!('userId' in data) || (data.userId is string && data.userId == userId)) &&
-             (!('ticketId' in data) || data.ticketId == null || isValidTicket(data.ticketId)) &&
-             data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 &&
-             (!('isBuy' in data) || data.isBuy is bool) &&
-             (!('buy' in data) || data.buy is bool) &&
+    function isValidOpenTrade(data) {
+      return data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 &&
+             data.type is string && (data.type == 'BUY' || data.type == 'SELL') &&
              isNum(data.lots) && data.lots > 0 && data.lots <= 1000 &&
              isNum(data.openPrice) && data.openPrice > 0 &&
-             (!('currentPrice' in data) || data.currentPrice == null || (isNum(data.currentPrice) && data.currentPrice > 0)) &&
-             isNum(data.profit) &&
-             data.openTime is string && data.openTime.size() >= 1 && data.openTime.size() <= 160 &&
-             (!('sl' in data) || data.sl == null || (isNum(data.sl) && data.sl >= 0)) &&
-             (!('tp' in data) || data.tp == null || (isNum(data.tp) && data.tp >= 0)) &&
-             (!('swap' in data) || data.swap == null || isNum(data.swap)) &&
-             (!('commission' in data) || data.commission == null || isNum(data.commission)) &&
-             (!('createdAt' in data) || data.createdAt == null || data.createdAt is timestamp || data.createdAt is string || isNum(data.createdAt)) &&
-             (!('updatedAt' in data) || data.updatedAt == null || data.updatedAt is timestamp || data.updatedAt is string || isNum(data.updatedAt));
+             isNum(data.sl) && data.sl >= 0 &&
+             isNum(data.tp) && data.tp >= 0 &&
+             isNum(data.commission) &&
+             isNum(data.swap) &&
+             data.openTime is timestamp && data.openTime <= request.time &&
+             (!('ticketId' in data) || (isNum(data.ticketId) && data.ticketId > 0)) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
     }
 
-    function isValidHistoryTrade(data, userId) {
-      return (!('userId' in data) || (data.userId is string && data.userId == userId)) &&
-             (!('ticketId' in data) || data.ticketId == null || isValidTicket(data.ticketId)) &&
-             data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 &&
-             (!('isBuy' in data) || data.isBuy is bool) &&
-             (!('buy' in data) || data.buy is bool) &&
+    function isValidTradeHistory(data) {
+      return data.symbol is string && data.symbol.size() >= 1 && data.symbol.size() <= 32 &&
+             data.type is string && (data.type == 'BUY' || data.type == 'SELL' || data.type == 'WITHDRAWAL' || data.type == 'BALANCE') &&
              isNum(data.lots) && data.lots > 0 && data.lots <= 1000 &&
              isNum(data.openPrice) && data.openPrice > 0 &&
              isNum(data.closePrice) && data.closePrice > 0 &&
              isNum(data.profit) &&
-             data.openTime is string && data.openTime.size() >= 1 && data.openTime.size() <= 160 &&
-             data.closeTime is string && data.closeTime.size() >= 1 && data.closeTime.size() <= 64 &&
-             (!('commission' in data) || data.commission == null || isNum(data.commission)) &&
-             (!('swap' in data) || data.swap == null || isNum(data.swap)) &&
-             (!('sl' in data) || data.sl == null || (isNum(data.sl) && data.sl >= 0)) &&
-             (!('tp' in data) || data.tp == null || (isNum(data.tp) && data.tp >= 0)) &&
-             (!('createdAt' in data) || data.createdAt == null || data.createdAt is timestamp || data.createdAt is string || isNum(data.createdAt)) &&
-             (!('updatedAt' in data) || data.updatedAt == null || data.updatedAt is timestamp || data.updatedAt is string || isNum(data.updatedAt));
+             isNum(data.commission) &&
+             isNum(data.swap) &&
+             isNum(data.netProfit) &&
+             data.openTime is timestamp && data.openTime <= request.time &&
+             data.closeTime is timestamp && data.closeTime <= request.time &&
+             (!('ticketId' in data) || (isNum(data.ticketId) && data.ticketId > 0)) &&
+             (!('sl' in data) || (isNum(data.sl) && data.sl >= 0)) &&
+             (!('tp' in data) || (isNum(data.tp) && data.tp >= 0)) &&
+             (!('isWithdrawal' in data) || data.isWithdrawal is bool) &&
+             (!('comment' in data) || (data.comment is string && data.comment.size() <= 200)) &&
+             (!('hitOutcome' in data) || (data.hitOutcome is string && (data.hitOutcome == 'NONE' || data.hitOutcome == 'TP_HIT' || data.hitOutcome == 'SL_HIT'))) &&
+             (!('updatedAt' in data) || (data.updatedAt is timestamp && data.updatedAt <= request.time));
     }
 
-    function isValidAccount(data, userId) {
-      return (!('userId' in data) || (data.userId is string && data.userId == userId)) &&
-             isNum(data.balance) &&
-             isNum(data.deposit) &&
-             isNum(data.realizedProfit) &&
-             (!('totalSwap' in data) || data.totalSwap == null || isNum(data.totalSwap)) &&
-             (!('totalCommission' in data) || data.totalCommission == null || isNum(data.totalCommission)) &&
-             data.accountName is string && data.accountName.size() >= 1 && data.accountName.size() <= 64 &&
-             data.brokerName is string && data.brokerName.size() >= 1 && data.brokerName.size() <= 128 &&
-             data.accountId is string && data.accountId.size() >= 1 && data.accountId.size() <= 128 &&
-             data.serverName is string && data.serverName.size() >= 1 && data.serverName.size() <= 128 &&
-             (!('isReal' in data) || data.isReal is bool) &&
-             (!('createdAt' in data) || data.createdAt == null || data.createdAt is timestamp || data.createdAt is string || isNum(data.createdAt)) &&
-             (!('updatedAt' in data) || data.updatedAt == null || data.updatedAt is timestamp || data.updatedAt is string || isNum(data.updatedAt));
-    }
-
-    match /users/{userId}/positions/{positionId} {
+    match /users/{userId} {
       allow get: if isSignedIn() &&
                     request.auth.uid == userId &&
-                    isValidId(userId) &&
-                    isValidId(positionId);
+                    isValidId(userId);
 
-      allow list: if isSignedIn() &&
-                     request.auth.uid == userId &&
-                     isValidId(userId);
+      allow create: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       isValidId(userId) &&
+                       incoming().keys().hasAll([
+                         'email', 'balance', 'leverage', 'currency', 'createdAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'email', 'displayName', 'photoURL', 'balance', 'leverage', 'currency', 'createdAt', 'updatedAt',
+                         'deposit', 'realizedProfit', 'totalWithdrawal', 'totalSwap',
+                         'totalCommission', 'accountName', 'brokerName', 'accountId',
+                         'serverName', 'isReal', 'depositDate', 'logoType'
+                       ]) &&
+                       isValidUserAccount(incoming());
 
-      allow create, update: if isSignedIn() &&
-                               request.auth.uid == userId &&
-                               isValidId(userId) &&
-                               isValidId(positionId) &&
-                               incoming().keys().hasAll([
-                                 'symbol', 'lots', 'openPrice', 'profit', 'openTime'
-                               ]) &&
-                               incoming().keys().hasOnly([
-                                 'id', 'userId', 'ticketId', 'ticket', 'symbol', 'isBuy', 'buy',
-                                 'side', 'type', 'lots', 'openPrice', 'currentPrice', 'sl', 'tp',
-                                 'profit', 'swap', 'commission', 'openTime', 'accountKey', 'key',
-                                 'createdAt', 'updatedAt'
-                               ]) &&
-                               isValidPosition(incoming(), userId);
+      allow update: if isSignedIn() &&
+                       request.auth.uid == userId &&
+                       isValidId(userId) &&
+                       isValidUserAccount(incoming()) &&
+                       (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'email', 'displayName', 'photoURL', 'balance', 'leverage', 'currency', 'updatedAt',
+                         'deposit', 'realizedProfit', 'totalWithdrawal', 'totalSwap',
+                         'totalCommission', 'accountName', 'brokerName', 'accountId',
+                         'serverName', 'isReal', 'depositDate', 'logoType'
+                       ]);
 
       allow delete: if isSignedIn() &&
                        request.auth.uid == userId &&
-                       isValidId(userId) &&
-                       isValidId(positionId);
-    }
+                       isValidId(userId);
 
-    match /users/{userId}/history/{historyId} {
-      allow get: if isSignedIn() &&
-                    request.auth.uid == userId &&
-                    isValidId(userId) &&
-                    isValidId(historyId);
+      match /open_trades/{tradeId} {
+        allow get: if isSignedIn() &&
+                      request.auth.uid == userId &&
+                      isValidId(userId) &&
+                      isValidId(tradeId);
 
-      allow list: if isSignedIn() &&
-                     request.auth.uid == userId &&
-                     isValidId(userId);
-
-      allow create, update: if isSignedIn() &&
-                               request.auth.uid == userId &&
-                               isValidId(userId) &&
-                               isValidId(historyId) &&
-                               incoming().keys().hasAll([
-                                 'symbol', 'lots', 'openPrice', 'closePrice', 'profit', 'openTime', 'closeTime'
-                               ]) &&
-                               incoming().keys().hasOnly([
-                                 'id', 'userId', 'ticketId', 'ticket', 'symbol', 'isBuy', 'buy',
-                                 'side', 'type', 'lots', 'openPrice', 'closePrice', 'profit',
-                                 'openTime', 'closeTime', 'commission', 'swap', 'sl', 'tp',
-                                 'isWithdrawal', 'comment', 'hitOutcome', 'accountKey', 'key',
-                                 'createdAt', 'updatedAt'
-                               ]) &&
-                               isValidHistoryTrade(incoming(), userId);
-
-      allow delete: if isSignedIn() &&
+        allow list: if isSignedIn() &&
                        request.auth.uid == userId &&
-                       isValidId(userId) &&
-                       isValidId(historyId);
-    }
+                       isValidId(userId);
 
-    match /users/{userId}/accounts/{accountDocId} {
-      allow get: if isSignedIn() &&
-                    request.auth.uid == userId &&
-                    isValidId(userId) &&
-                    isValidId(accountDocId);
+        allow create: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         isValidId(userId) &&
+                         isValidId(tradeId) &&
+                         incoming().keys().hasAll([
+                           'symbol', 'type', 'lots', 'openPrice', 'sl', 'tp',
+                           'commission', 'swap', 'openTime'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'symbol', 'type', 'lots', 'openPrice', 'sl', 'tp',
+                           'commission', 'swap', 'openTime', 'ticketId', 'updatedAt'
+                         ]) &&
+                         isValidOpenTrade(incoming());
 
-      allow list: if isSignedIn() &&
-                     request.auth.uid == userId &&
-                     isValidId(userId);
+        allow update: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         isValidId(userId) &&
+                         isValidId(tradeId) &&
+                         isValidOpenTrade(incoming()) &&
+                         incoming().openTime == existing().openTime &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'sl', 'tp', 'lots', 'openPrice', 'symbol', 'type',
+                           'commission', 'swap', 'ticketId', 'updatedAt'
+                         ]);
 
-      allow create, update: if isSignedIn() &&
-                               request.auth.uid == userId &&
-                               isValidId(userId) &&
-                               isValidId(accountDocId) &&
-                               incoming().keys().hasAll([
-                                 'balance', 'deposit', 'realizedProfit',
-                                 'accountName', 'brokerName', 'accountId', 'serverName'
-                               ]) &&
-                               incoming().keys().hasOnly([
-                                 'id', 'key', 'userId', 'balance', 'deposit', 'realizedProfit',
-                                 'totalSwap', 'totalCommission', 'swap', 'commission',
-                                 'accountName', 'brokerName', 'accountId', 'serverName',
-                                 'isReal', 'real', 'depositDate', 'logoType',
-                                 'createdAt', 'updatedAt'
-                               ]) &&
-                               isValidAccount(incoming(), userId);
+        allow delete: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         isValidId(userId) &&
+                         isValidId(tradeId);
+      }
 
-      allow delete: if isSignedIn() &&
+      match /trade_history/{dealId} {
+        allow get: if isSignedIn() &&
+                      request.auth.uid == userId &&
+                      isValidId(userId) &&
+                      isValidId(dealId);
+
+        allow list: if isSignedIn() &&
                        request.auth.uid == userId &&
-                       isValidId(userId) &&
-                       isValidId(accountDocId);
+                       isValidId(userId);
+
+        allow create: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         isValidId(userId) &&
+                         isValidId(dealId) &&
+                         incoming().keys().hasAll([
+                           'symbol', 'type', 'lots', 'openPrice', 'closePrice',
+                           'profit', 'commission', 'swap', 'netProfit', 'openTime', 'closeTime'
+                         ]) &&
+                         incoming().keys().hasOnly([
+                           'symbol', 'type', 'lots', 'openPrice', 'closePrice',
+                           'profit', 'commission', 'swap', 'netProfit', 'openTime', 'closeTime',
+                           'ticketId', 'sl', 'tp', 'isWithdrawal', 'comment', 'hitOutcome', 'updatedAt'
+                         ]) &&
+                         isValidTradeHistory(incoming());
+
+        allow update: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         isValidId(userId) &&
+                         isValidId(dealId) &&
+                         isValidTradeHistory(incoming()) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'symbol', 'type', 'lots', 'openPrice', 'closePrice',
+                           'profit', 'commission', 'swap', 'netProfit', 'openTime', 'closeTime',
+                           'ticketId', 'sl', 'tp', 'isWithdrawal', 'comment', 'hitOutcome', 'updatedAt'
+                         ]);
+
+        allow delete: if isSignedIn() &&
+                         request.auth.uid == userId &&
+                         isValidId(userId) &&
+                         isValidId(dealId);
+      }
     }
   }
 }
-
